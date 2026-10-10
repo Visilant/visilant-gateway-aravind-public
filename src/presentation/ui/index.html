@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visilant Gateway</title>
+  <link rel="icon" href="/ui/logo-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body class="signed-out">
+  <header class="band">
+    <img src="/ui/logo-full.svg" alt="Visilant">
+    <nav aria-label="Main navigation">
+      <a href="#/queue" data-view="queue">Queue</a><a href="#/screenings" data-view="screenings">Screenings</a><a href="#/health" data-view="health">Health</a>
+      <a href="#/diagnostics" data-view="diagnostics">Diagnostics</a><a href="#/config" data-view="config">Config</a>
+      <a href="#/device" data-view="device">Device</a><a href="#/captures" data-view="captures">Captures</a>
+    </nav>
+    <details class="account"><summary aria-label="Account menu"><i></i></summary><div class="menu"><div class="who" id="account"></div><button type="button" data-action="signout">Sign out</button></div></details>
+  </header>
+  <main class="wrap" id="root" aria-live="polite"><p>Loading…</p></main>
+  <noscript>This operator page needs JavaScript enabled.</noscript>
+</body>
+</html>

@@ -1,0 +1,61 @@
+# Local dcm4chee archive for development.
+#
+# The gateway is an on-prem product: development should not depend on a cloud PACS
+# being up, and the previous shared dev PACS is already unreachable. This brings up a
+# real DICOM archive on localhost — C-ECHO, C-FIND (MWL) and C-STORE all work against
+# it, which is everything the gateway needs to talk to.
+#
+#   docker compose -f dev/docker-compose.pacs.yml up -d
+#
+#   DIMSE     localhost:11112   called AE DCM4CHEE
+#   Web UI    http://localhost:8008/dcm4chee-arc/ui2
+#   DICOMweb  http://localhost:8008/dcm4chee-arc/aets/DCM4CHEE/rs
+#
+# Ports are shifted off the defaults (8008, not 8080) to stay clear of the gateway and
+# anything else already listening locally.
+
+services:
+  ldap:
+    image: dcm4che/slapd-dcm4chee:2.6.13-35.1
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ldap_conf:/etc/openldap/slapd.d
+      - ldap_data:/var/lib/openldap/openldap-data
+
+  db:
+    image: dcm4che/postgres-dcm4chee:17.9-35
+    logging: *logging
+    environment:
+      POSTGRES_DB: pacsdb
+      POSTGRES_USER: pacs
+      POSTGRES_PASSWORD: pacs
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  arc:
+    image: dcm4che/dcm4chee-arc-psql:5.35.1
+    logging: *logging
+    ports:
+      - "8008:8080"     # web UI + DICOMweb
+      - "11112:11112"   # DIMSE — C-ECHO / C-FIND / C-STORE
+    environment:
+      POSTGRES_DB: pacsdb
+      POSTGRES_USER: pacs
+      POSTGRES_PASSWORD: pacs
+      WILDFLY_CHOWN: /opt/wildfly/standalone
+      WILDFLY_WAIT_FOR: ldap:389 db:5432
+    depends_on:
+      - ldap
+      - db
+    volumes:
+      - arc_data:/storage
+
+volumes:
+  ldap_conf:
+  ldap_data:
+  db_data:
+  arc_data:

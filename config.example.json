@@ -1,0 +1,25 @@
+{
+  "centre_code": "ARAVIND_XX",
+  "listen_port": 8080,
+  "storage_root": "C:\\ProgramData\\Visilant\\captures",
+  "database_path": "C:\\ProgramData\\Visilant\\gateway.db",
+  "retention": "KEEP",
+  "retention_keep_count": 10,
+  "study_uid_root": "1.2.826.0.1.3680043.10.1338",
+  "mwl": {
+    "host": "10.0.0.10",
+    "port": 11112,
+    "called_ae": "WORKLIST",
+    "calling_ae": "VISILANT",
+    "requested_procedure_id": "REPLACE_ME"
+  },
+  "store": {
+    "host": "10.0.0.10",
+    "port": 11112,
+    "called_ae": "REMOTE_AE_STORE",
+    "calling_ae": "VISILANT"
+  },
+  "sync_interval_seconds": 30,
+  "send_immediately": true,
+  "max_send_attempts": 20
+}

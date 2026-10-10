@@ -1,0 +1,38 @@
+# Typecheck, test and build the gateway on every pull request and every push to main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway:
+    name: Gateway (Node 22)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      # The DICOM builder shells out to DCMTK (img2dcm, dcm2json, echoscu, findscu,
+      # storescu) and the JPEG tests generate fixtures with ImageMagick. Ubuntu ships
+      # ImageMagick 6, whose entry point is `convert`; the code calls `magick`.
+      - name: Install DCMTK and ImageMagick
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q dcmtk imagemagick
+          sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+          img2dcm --version | head -1
+          magick -version | head -1
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --runInBand
+      - run: npm run build
+

@@ -1,0 +1,56 @@
+{
+  "name": "visilant-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "On-prem capture gateway for vision centres. Reads the DICOM modality worklist from the hospital RIS, receives eye photographs from the Visilant capture app, and stores them to the hospital PACS.",
+  "main": "build/src/index.js",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "build": "tsc && npm run copy-ui",
+    "start": "node build/src/index.js",
+    "dev": "ts-node src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "typeorm": "typeorm-ts-node-commonjs -d src/infrastructure/database/data-source.ts",
+    "migration:generate": "npm run typeorm -- migration:generate",
+    "migration:run": "npm run typeorm -- migration:run",
+    "migration:revert": "npm run typeorm -- migration:revert",
+    "test": "jest",
+    "check": "npm run typecheck && npm test -- --runInBand && npm run build",
+    "e2e": "node dev/e2e.mjs",
+    "users": "ts-node src/cli/manage-users.ts",
+    "copy-ui": "node -e \"require('fs').cpSync('src/presentation/ui', 'build/src/presentation/ui', { recursive: true })\"",
+    "setup": "node build/src/setup/launcher.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^11.10.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.4",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.4.0",
+    "reflect-metadata": "^0.2.2",
+    "routing-controllers": "^0.11.3",
+    "typedi": "^0.10.0",
+    "typeorm": "^0.3.20",
+    "uuid": "^11.0.5",
+    "winston": "^3.19.0",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^30.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.13.17",
+    "@types/yazl": "^2.4.6",
+    "jest": "^30.5.1",
+    "ts-jest": "^29.4.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}
