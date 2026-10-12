@@ -45,6 +45,7 @@ checks its format and stores it in a private DICOM tag. It does not run any mode
 | Change how the worklist is queried or filtered (procedure ID, modality, station) | [docs/worklist.md](docs/worklist.md) |
 | Change what goes into the DICOM file or how it reaches the PACS | [docs/dicom-output.md](docs/dicom-output.md) |
 | Run the gateway on your computer, run tests, make a change | [docs/development.md](docs/development.md) |
+| Do that on a Windows computer | [docs/windows-development.md](docs/windows-development.md) |
 | Install it on a Windows computer at a hospital | [docs/windows-gateway.md](docs/windows-gateway.md) |
 | See every `config.json` setting | [docs/configuration.md](docs/configuration.md) |
 | See the HTTP API that the phone uses | [docs/api.md](docs/api.md) |

@@ -1,6 +1,9 @@
 # Development
 
 How to run the gateway on your own computer, test it, and make the most common changes.
+Commands are for macOS or Linux. On Windows, follow
+[windows-development.md](windows-development.md) for setup and commands, then come back
+here for the recipes.
 
 ## Requirements
 

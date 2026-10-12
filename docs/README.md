@@ -16,6 +16,7 @@ config key, update the document that describes it in the same change.
 | Document | What it covers |
 |---|---|
 | [development.md](development.md) | Local setup, the test PACS, tests, end-to-end run, migrations, and step-by-step recipes for common changes |
+| [windows-development.md](windows-development.md) | The same on a Windows computer: installing Node, DCMTK, ImageMagick and Docker, PowerShell commands, building the bundle, Windows pitfalls |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Coding rules: layering, validation, migrations, patient data |
 | [api.md](api.md) | HTTP API used by the phone and the operator page |
 | [configuration.md](configuration.md) | Every `config.json` key and environment variable |
