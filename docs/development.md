@@ -1,32 +1,76 @@
 # Development
 
-How to run the gateway on your own computer, test it, and make the most common changes.
-Commands are for macOS or Linux. On Windows, follow
-[windows-development.md](windows-development.md) for setup and commands, then come back
-here for the recipes.
+How to run the gateway from source on a Windows computer, test it, and make the most
+common changes. Commands are for **PowerShell**. Windows 10 or 11, 64-bit.
 
-## Requirements
+If you only need to **install** a gateway and connect the phone, follow
+[windows-setup.md](windows-setup.md) instead. You do not need anything here for that.
 
-| Tool | Why | Install |
+## 1. Tools
+
+If you have already run [windows-setup.md](windows-setup.md) on this computer, you have
+Git, Node 22, DCMTK and ImageMagick. Otherwise:
+
+| Tool | Why | How to get it |
 |---|---|---|
-| **Node 22** | Runtime. `package.json` allows only 22. `better-sqlite3` has Windows prebuilds for Node 20 and 22 but not 24 | `nvm install 22 && nvm use` (`.nvmrc` pins it) |
-| **DCMTK** | `findscu`, `img2dcm`, `storescu`, `echoscu`, `dcm2json`, `dcmdump`, `dcmodify` | `brew install dcmtk` or `apt install dcmtk` |
-| **ImageMagick 7** | `magick`, to turn rotated or progressive JPEGs upright | `brew install imagemagick`. On Ubuntu (ImageMagick 6), link `convert` as `magick` |
-| **Docker** | Local test PACS and worklist (dcm4chee) | Docker Desktop or Docker Engine |
+| **Git for Windows** | Clone and commit | https://git-scm.com/download/win |
+| **Node 22, 64-bit** | Runtime. `package.json` allows only 22. `better-sqlite3` has Windows builds for Node 22, **not 24**, so a newer Node fails at `npm ci` with a node-gyp or Visual Studio error | nvm-windows (`nvm install 22`, then `nvm use 22`), or the Node 22 LTS installer from https://nodejs.org |
+| **DCMTK** and **ImageMagick 7 (portable)** | The DICOM tools and `magick` | Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\setup.ps1` once: it downloads both into `C:\Tools` and adds them to `PATH` before it builds and installs. Or follow the manual steps below |
+| **Docker Desktop** (optional) | A local test PACS and worklist (dcm4chee), and `npm run e2e` | https://www.docker.com/products/docker-desktop/ with the WSL 2 backend. Not needed if you develop against your own test PACS |
 
-The tools must be on `PATH`, or you can point to each one with an environment variable
+**Manual DCMTK and ImageMagick.** Extract the DCMTK Windows x64 ZIP from
+https://dicom.offis.de/download/dcmtk/ to `C:\Tools\dcmtk`, and the
+`ImageMagick-7.x-portable-Q16-x64` archive from https://imagemagick.org/script/download.php#windows
+to `C:\Tools\ImageMagick`. Use the **portable** ImageMagick, not the installer (see
+[troubleshooting.md](troubleshooting.md#capture-could-not-be-read-as-a-jpeg-image)). Then
+add both to `PATH` and open a new PowerShell window:
+
+```powershell
+[Environment]::SetEnvironmentVariable('Path', $env:Path + ';C:\Tools\dcmtk\bin;C:\Tools\ImageMagick', 'User')
+```
+
+If you cannot change `PATH`, point the gateway at each tool with an environment variable
 (`FINDSCU_BIN`, `MAGICK_BIN`, ...). See [configuration.md](configuration.md#environment).
 
-## First run
+Check in a **new** PowerShell window:
 
-```bash
-nvm use
+```powershell
+node -v                # v22.x.x
+node -p process.arch   # x64
+echoscu --version
+magick -version
+```
+
+Set this once so Git does not rewrite every file's line endings:
+
+```powershell
+git config --global core.autocrlf false
+```
+
+## 2. First run from source
+
+```powershell
+cd visilant-gateway-aravind-public
+nvm use 22        # only with nvm-windows
 npm ci
+```
+
+`npm ci` must finish **without compiling anything**. If you see `node-gyp`, `MSBuild` or
+"Visual Studio", the wrong Node is active.
+
+### Pick a test PACS
+
+**Your own test PACS and worklist.** Use their addresses and AE titles in `config.json`
+below. Use only test patients.
+
+**Or the local one in Docker:**
+
+```powershell
 docker compose -f dev/docker-compose.pacs.yml up -d
 ```
 
-The archive takes one to two minutes to start the first time. It is ready when
-`echoscu localhost 11112 -aec DCM4CHEE -aet VISILANT` returns without error.
+It takes one to two minutes the first time. It is ready when this returns without error:
+`echoscu localhost 11112 -aec DCM4CHEE -aet VISILANT`.
 
 | Local archive | |
 |---|---|
@@ -35,7 +79,14 @@ The archive takes one to two minutes to start the first time. It is ready when
 | Archive AE title | `DCM4CHEE` |
 | Web viewer | http://localhost:8008/dcm4chee-arc/ui2 |
 
-Make a `config.json`:
+Add five made-up orders to it with `node dev/seed-mwl.mjs 5` (station `VISILANT`, modality
+`OP`).
+
+### config.json
+
+Make a `config.json` in the repository root. This one is for the local Docker archive;
+for your own test PACS change `host`, `port` and `called_ae`. Relative paths with forward
+slashes are fine.
 
 ```json
 {
@@ -49,42 +100,83 @@ Make a `config.json`:
 }
 ```
 
-Then:
+`config.json`, `data/` and `captures/` are ignored by Git. Never commit them.
 
-```bash
-node dev/seed-mwl.mjs 5                                # five test orders, station VISILANT, modality OP
+### Run it
+
+```powershell
 npm run users -- add dev@example.org dev --admin       # prints a password once
 npm run dev
 ```
 
-Check it:
+The first time, Windows Firewall may ask about `node.exe`. Allow it on **Private**
+networks if you want to test with a phone.
 
-```bash
-curl -s localhost:8080/health
-TOKEN=$(curl -s localhost:8080/signin -H 'content-type: application/json' \
-  -d '{"email":"dev@example.org","password":"<password>"}' | node -pe 'JSON.parse(require("fs").readFileSync(0)).data.token')
-curl -s localhost:8080/worklist -H "authorization: Bearer $TOKEN"
+**Port 8080 is taken** if the installed gateway from [windows-setup.md](windows-setup.md)
+runs on the same computer. Set `"listen_port": 8090` in your `config.json` instead.
+
+Check it. In PowerShell `curl` is not the real curl, so use `Invoke-RestMethod`:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/health
+
+$signin = Invoke-RestMethod -Method Post -Uri http://localhost:8080/signin -ContentType 'application/json' `
+  -Body '{"email":"dev@example.org","password":"<password>"}'
+$token = $signin.data.token
+Invoke-RestMethod http://localhost:8080/worklist -Headers @{ Authorization = "Bearer $token" }
 ```
 
+`/health` returns `503` with a `detail` when something is wrong, for example
+`echoscu not found` when DCMTK is not on `PATH`.
+
 The operator page is at http://localhost:8080/ui. Under `npm run dev` it is served from
-`src/presentation/ui`. `npm run build` copies it to `build/` for `npm start`.
+`src/presentation/ui`; `npm run build` copies it to `build/` for `npm start`.
 
-The test data from `dev/seed-mwl.mjs` is made up. Never use real patient data in
-development.
+### Test with the phone against your source gateway
 
-## Tests
+1. Put the phone on the same Wi-Fi as the computer.
+2. Find the computer's address with `ipconfig` (the IPv4 address of the Wi-Fi or Ethernet
+   adapter, not a WSL or Docker one).
+3. If you cancelled the firewall prompt, allow the port:
+   ```powershell
+   New-NetFirewallRule -DisplayName "Visilant dev gateway" -Direction Inbound -Protocol TCP -LocalPort 8080 -Profile Private -Action Allow
+   ```
+4. On the phone, sign in with that address, the port and the account you created.
+
+Remove the rule afterwards: `Remove-NetFirewallRule -DisplayName "Visilant dev gateway"`.
+
+### Run the setup wizard from source
+
+This runs the same wizard the installer uses, without installing anything:
+
+```powershell
+npm run build
+$env:GATEWAY_SETUP_DIR = "$HOME\visilant-setup-test"
+npm run setup
+```
+
+Open http://127.0.0.1:8081. Use an empty folder for `GATEWAY_SETUP_DIR`, never
+`C:\ProgramData\Visilant`. Stop the installed gateway first, or it already holds port 8081.
+
+## 3. Tests
 
 | Command | What it runs |
 |---|---|
 | `npm test -- --runInBand` | All Jest tests. The tests that need real DCMTK are skipped |
-| `TEST_DCMTK=1 npm test -- --runInBand` | Also builds and reads real DICOM files with DCMTK and ImageMagick |
-| `npm run e2e` | Builds the gateway, starts the local archive if needed, seeds its own orders, and drives two real gateways over HTTP the way the phone does: worklist, upload, delivery, PACS outage, back-off, `FAILED` and retry, power cut in the middle of a send, repeated uploads. Add `-- --keep` to keep its temporary folders and logs |
+| `$env:TEST_DCMTK = '1'; npm test -- --runInBand` | Also builds and reads real DICOM files with DCMTK and ImageMagick |
+| `npm run e2e` | Needs Docker Desktop. Builds the gateway, starts the local archive if needed, and drives two real gateways over HTTP the way the phone does: worklist, upload, delivery, PACS outage, back-off, `FAILED` and retry, power cut during a send, repeated uploads. Add `-- --keep` to keep its folders and logs. The clean-shutdown check is skipped on Windows, which cannot ask a process to shut down gracefully |
 | `npm run check` | Typecheck, tests and build. CI runs the same steps |
 
 Tests live in `tests/`, one file per unit (`worklist-client.test.ts`,
 `capture-service.test.ts`, `sync-worker.test.ts`, ...).
 
-## Database changes
+CI runs on Ubuntu. If a test passes in CI but fails on your computer, the usual causes are
+a tool missing from `PATH` or antivirus holding a temporary file open. Fix the cause or
+report it; do not skip the test. Windows Defender can make `npm ci` and Jest several
+times slower; excluding the repository folder from real-time scanning helps on a
+development computer (not on a gateway at a site).
+
+## 4. Database changes
 
 The schema is defined by the entities in `src/infrastructure/database/entities/`.
 
@@ -100,7 +192,7 @@ The schema is defined by the entities in `src/infrastructure/database/entities/`
 Migrations run automatically at start-up on every installed gateway. A migration that
 fails, or that loses data, breaks a centre's gateway with no one on site to fix it.
 
-## Recipes
+## 5. Recipes
 
 ### Change the worklist filter
 
@@ -143,13 +235,55 @@ See [dicom-output.md](dicom-output.md#changing-the-dicom-output).
 doubling to 30 min) is `BACKOFF_BASE_MS` and `BACKOFF_CAP_MS` in
 `src/application/services/SyncWorker.ts`.
 
-## Build the Windows bundle
+## 6. Build the Windows bundle by hand
 
-The bundle must be built **on a Windows x64 computer**, because it needs the Windows build
-of `better-sqlite3`. See [windows-gateway.md](windows-gateway.md#build-the-windows-bundle).
+`windows\setup.ps1` builds the bundle and installs it in one go. To build only the ZIP,
+for example to send to a site:
+
+```powershell
+npm.cmd ci
+powershell.exe -NoProfile -File .\windows\package.ps1 `
+  -DcmtkDirectory C:\Tools\dcmtk `
+  -ImageMagickDirectory C:\Tools\ImageMagick
+```
+
+The output is `dist\windows\InSight-Gateway-<date>.zip` and a `.sha256` file. Build from a
+clean, committed tree: the bundle's `manifest.json` records the commit and whether the
+tree was dirty. If the script stops:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `Build with Node 22.` / `Build with Windows x64 Node.` | Wrong `node.exe` first on `PATH` | `nvm use 22`, or install the 64-bit Node 22 |
+| `Missing DCMTK bin\<tool>.exe` | Incomplete DCMTK folder | Extract the full DCMTK ZIP; it must have a `bin` folder |
+| `Use a portable ImageMagick distribution with magick.exe at its root.` | Wrong folder | `magick.exe` must be directly inside the folder |
+| `ImageMagick could not read and convert a JPEG image.` | ImageMagick cannot find its modules | Use the portable build |
+| `Repository dependencies are missing.` | `npm ci` not run | Run `npm.cmd ci` first |
+| `Use the official Node Windows archive and retain its LICENSE alongside node.exe.` | `node.exe` without its `LICENSE` file | Install Node from the official installer or with nvm-windows |
+
+More about the bundle and the installer: [windows-gateway.md](windows-gateway.md).
+
+## 7. Windows pitfalls
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `npm`: "running scripts is disabled" | PowerShell execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `npm.cmd` |
+| `npm ci` compiles with node-gyp, or a Visual Studio error | Node 24 or 32-bit Node | Node 22 x64 |
+| `nvm use` says "version not specified" | nvm-windows does not read `.nvmrc` | `nvm use 22` |
+| `/health` returns 503 "echoscu not found" | DCMTK not on `PATH` | Add `C:\Tools\dcmtk\bin` to `PATH` and open a new window |
+| `magick` not found | ImageMagick not on `PATH` | Add `C:\Tools\ImageMagick` to `PATH` |
+| `convert` does something strange | `convert.exe` on Windows is a disk tool | The gateway always calls `magick` |
+| `TEST_DCMTK=1 npm test` "not recognized" | That is bash syntax | `$env:TEST_DCMTK = '1'; npm test -- --runInBand` |
+| `curl` returns an object or asks for parameters | PowerShell alias | `Invoke-RestMethod`, or `curl.exe` |
+| Docker hangs or the archive does not start | Docker Desktop not running, WSL 2 missing, or virtualisation off in the BIOS | Start Docker Desktop and wait for "running" |
+| Port 8080 or 8081 in use | The installed gateway, or another program | `Get-NetTCPConnection -LocalPort 8080` shows the process ID |
+| Phone cannot reach the source gateway | Firewall, or the wrong adapter's address | Allow TCP 8080 on Private; use the Wi-Fi or Ethernet address from `ipconfig` |
+| Git shows every file as modified | `core.autocrlf` rewrote line endings | `git config --global core.autocrlf false`, then clone again |
 
 ## Before you push
 
+The rules in [CONTRIBUTING.md](../CONTRIBUTING.md) apply in full:
+
 - `npm run check` passes.
 - Docs that describe what you changed are updated in the same commit.
-- No patient data, `config.json`, database or `.dcm` file is in the commit.
+- No patient data, `config.json`, database, `.dcm` file, log or screenshot from a site is
+  in the commit.

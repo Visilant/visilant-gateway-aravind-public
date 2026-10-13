@@ -37,68 +37,62 @@ This repository holds **only the gateway**. The capture app and its AI models ar
 included. The gateway accepts an optional AI result that the app sends with a photograph,
 checks its format and stores it in a private DICOM tag. It does not run any model.
 
-## Start here
+## Get started
+
+Everything runs on **Windows 10 or 11, 64-bit**. You need **Git** and **Node 22** (not 24).
+Then, in PowerShell:
+
+```powershell
+git clone https://github.com/Visilant/visilant-gateway-aravind-public.git
+cd visilant-gateway-aravind-public
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\setup.ps1
+```
+
+The setup command downloads DCMTK and ImageMagick, builds the gateway, installs it and
+opens the **setup wizard** in your browser. In the wizard you enter your worklist and PACS
+details and create an account. Then you sign in with that account on the phone.
+
+**Follow [docs/windows-setup.md](docs/windows-setup.md).** It walks through every step,
+including what to ask for before you start and what to type in each box of the wizard.
+
+## Learn the system
+
+[docs/README.md](docs/README.md) lists the documents in the order to read them, and the
+six rules every developer must know before changing anything.
 
 | If you want to... | Read |
 |---|---|
+| Install the gateway and connect the phone | [docs/windows-setup.md](docs/windows-setup.md) |
+| Fix a problem | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Understand how the code is organised | [docs/architecture.md](docs/architecture.md) |
-| Change how the worklist is queried or filtered (procedure ID, modality, station) | [docs/worklist.md](docs/worklist.md) |
+| Change which patients the phone sees (procedure ID, modality, station) | [docs/worklist.md](docs/worklist.md) |
 | Change what goes into the DICOM file or how it reaches the PACS | [docs/dicom-output.md](docs/dicom-output.md) |
-| Run the gateway on your computer, run tests, make a change | [docs/development.md](docs/development.md) |
-| Do that on a Windows computer | [docs/windows-development.md](docs/windows-development.md) |
-| Install it on a Windows computer at a hospital | [docs/windows-gateway.md](docs/windows-gateway.md) |
 | See every `config.json` setting | [docs/configuration.md](docs/configuration.md) |
+| Run from source, run tests, make a change | [docs/development.md](docs/development.md) |
 | See the HTTP API that the phone uses | [docs/api.md](docs/api.md) |
-| Fix a problem at a site | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | See how the Aravind installation is set up | [docs/aravind-deployment.md](docs/aravind-deployment.md) |
 | Follow the coding rules for this repository | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
-All documents are listed in [docs/README.md](docs/README.md).
-
-## Quick start (macOS or Linux)
-
-You need **Node 22**, **DCMTK**, **ImageMagick** and **Docker**. See
-[docs/development.md](docs/development.md) for details.
-
-```bash
-nvm use                                                   # Node 22, pinned in .nvmrc
-npm ci
-docker compose -f dev/docker-compose.pacs.yml up -d      # local test PACS + worklist (dcm4chee)
-cp config.example.json config.json                       # then edit: see below
-npm run users -- add you@example.org you --admin         # prints a generated password once
-npm run dev
-curl -s localhost:8080/health
-```
-
-For the local test PACS, set `mwl` and `store` in `config.json` to host `localhost`, port
-`11112`. The worklist `called_ae` is `WORKLIST` and the archive `called_ae` is `DCM4CHEE`.
-In `mwl`, **remove** `requested_procedure_id` (the example value `REPLACE_ME` matches
-nothing) and add `"scheduled_station_ae": "VISILANT"`. Set `storage_root` and
-`database_path` to local paths (for example `captures` and `data/gateway.db`). The full
-file is in [docs/development.md](docs/development.md#first-run). Add test patients to the
-worklist with `node dev/seed-mwl.mjs 5`.
-
-`GET /health` checks the database, the queue, free disk space, and sends a DICOM C-ECHO to
-both servers. It returns `200` when everything works and `503` when something does not,
-with a `detail` on the check that failed.
-
-To test the whole path (worklist, upload, DICOM, PACS) against the local archive, run
-`npm run e2e`.
-
 ## Commands
+
+For working on the code. Run them in PowerShell from the repository folder.
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Run the gateway from source |
+| `npm run dev` | Run the gateway from source (needs a `config.json`, see [development.md](docs/development.md)) |
 | `npm run build` then `npm start` | Compile to `build/` and run the compiled gateway |
 | `npm run typecheck` | Type-check without building |
-| `npm test -- --runInBand` | Unit and integration tests (`TEST_DCMTK=1` also runs the tests that call real DCMTK) |
-| `npm run e2e` | End-to-end test against the local PACS |
+| `npm test -- --runInBand` | Unit and integration tests. `$env:TEST_DCMTK = '1'` first also runs the tests that call real DCMTK |
+| `npm run e2e` | End-to-end test against a local test PACS in Docker |
 | `npm run check` | Typecheck, test and build: run this before you push |
 | `npm run users -- add <email> <username> [--admin]` | Create an account (prints a generated password once) |
 | `npm run users -- passwd <email>` | Reset a password |
 | `npm run migration:generate -- migrations/Name` | Generate a database migration from an entity change |
-| `npm run setup` | Run the setup wizard and gateway supervisor (used by the Windows bundle) |
+| `npm run setup` | Run the setup wizard from source |
+
+`GET /health` checks the database, the queue, free disk space, and sends a DICOM C-ECHO to
+both servers. It returns `200` when everything works and `503` when something does not,
+with a `detail` on the check that failed.
 
 ## Technology
 

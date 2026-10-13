@@ -25,9 +25,8 @@ Code: `src/infrastructure/dicom/WorklistClient.ts` (`buildKeys`) and
 
 On every `GET /worklist` the gateway runs:
 
-```bash
-findscu -W <mwl.host> <mwl.port> -aec <mwl.called_ae> -aet <mwl.calling_ae> \
-    -k <key> -k <key> ... -X -od <temporary folder>
+```text
+findscu -W <mwl.host> <mwl.port> -aec <mwl.called_ae> -aet <mwl.calling_ae> -k <key> -k <key> ... -X -od <temporary folder>
 ```
 
 - `-W` selects the Modality Worklist information model.
@@ -131,17 +130,18 @@ The row returned to the phone is defined in `src/application/dto/worklist.dto.ts
 
 ## Test the worklist by hand
 
-Run this on the gateway computer (DCMTK is in the bundle under `runtime\dcmtk\bin`). It
-asks only for procedure and scheduling fields, so you can see how the orders are coded.
+Run this in PowerShell on the gateway computer. If `findscu` is not found, first run
+`cd "C:\Program Files\Visilant\InSight-Gateway\runtime\dcmtk\bin"` and type `.\findscu`
+instead of `findscu`. It asks only for procedure and scheduling fields, so you can see how the orders are coded.
 The server may still send patient details: read them on screen only, and do not paste
 them into chat, email or tickets.
 
-```bash
-findscu -v -W -aet VISILANT -aec <WORKLIST_AE> <host> <port> \
-  -k RequestedProcedureID -k RequestedProcedureDescription \
-  -k "ScheduledProcedureStepSequence[0].Modality" \
-  -k "ScheduledProcedureStepSequence[0].ScheduledStationAETitle" \
-  -k "ScheduledProcedureStepSequence[0].ScheduledProcedureStepDescription" \
+```powershell
+findscu -v -W -aet VISILANT -aec <WORKLIST_AE> <host> <port> `
+  -k RequestedProcedureID -k RequestedProcedureDescription `
+  -k "ScheduledProcedureStepSequence[0].Modality" `
+  -k "ScheduledProcedureStepSequence[0].ScheduledStationAETitle" `
+  -k "ScheduledProcedureStepSequence[0].ScheduledProcedureStepDescription" `
   -k "ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartDate"
 ```
 

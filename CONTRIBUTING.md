@@ -5,15 +5,15 @@ code. For what the system does, start at [docs/README.md](docs/README.md).
 
 ## Commands
 
-Use **Node 22** (`nvm use`). DCMTK and ImageMagick must be on `PATH`. See
-[docs/development.md](docs/development.md).
+Commands are for PowerShell on Windows. Use **Node 22** (`nvm use 22`). DCMTK and
+ImageMagick must be on `PATH`. See [docs/development.md](docs/development.md).
 
 | Task | Command |
 |---|---|
 | Install | `npm ci` |
 | Typecheck | `npm run typecheck` |
-| Test | `npm test -- --runInBand` (`TEST_DCMTK=1` adds the real-DCMTK tests) |
-| End to end | `npm run e2e` (needs Docker) |
+| Test | `npm test -- --runInBand` (`$env:TEST_DCMTK = '1'` first adds the real-DCMTK tests) |
+| End to end | `npm run e2e` (needs Docker Desktop) |
 | Build | `npm run build` |
 | Everything CI runs | `npm run check` |
 

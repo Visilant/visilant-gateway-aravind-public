@@ -75,7 +75,7 @@ database (`src/tokens.ts`).
 | `src/setup/` | Windows setup wizard on port 8081 and the launcher that supervises the gateway |
 | `src/cli/manage-users.ts` | `npm run users` |
 | `migrations/` | Generated database migrations. They run automatically at start-up |
-| `windows/` | PowerShell scripts that build, install and run the Windows bundle |
+| `windows/` | PowerShell scripts: `setup.ps1` (one command from a clone to the setup wizard), and the scripts that build, install and run the Windows bundle |
 | `dev/` | Local test PACS, worklist seeding, end-to-end test |
 | `tests/` | Jest tests |
 

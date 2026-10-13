@@ -9,7 +9,7 @@ paths, hosts, AE titles, centre code, and procedure ID need site-specific values
 local development, copy it to `config.json` and point `mwl` and `store` at the Compose
 archive: both `localhost:11112`, with called AE `WORKLIST` for `mwl` and `DCM4CHEE` for
 `store`. Remove `mwl.requested_procedure_id` (the example `REPLACE_ME` matches nothing)
-and use `"scheduled_station_ae": "VISILANT"`. See [development.md](development.md#first-run).
+and use `"scheduled_station_ae": "VISILANT"`. See [development.md](development.md#2-first-run-from-source).
 
 ## Settings
 

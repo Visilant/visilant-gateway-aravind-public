@@ -139,39 +139,16 @@ support. Do not delete the data folder to clear logs.
 
 ## Build the Windows bundle
 
-Build on **Windows x64** with Node 22 and the root lockfile installed. Supply complete
-portable tool distributions, including DLLs, modules and license notices; DCMTK must
-have `bin/`, and ImageMagick must have `magick.exe` at its root. The portable ImageMagick
-ZIP (`ImageMagick-7.x-portable-Q16-x64.zip`) is preferred. A copy of an installed
-ImageMagick also works, because `run.ps1` points it at its bundled `modules\coders`
-folder; without that it looks for its JPEG module in registry keys the site computer does
-not have, and every rotated photograph fails with `RegistryKeyLookupFailed
-CoderModulesPath`. The packager test-converts a JPEG the same way before it builds, and
-step 1 of the setup wizard converts one on the site computer. Keep the Node archive's
-`LICENSE` beside `node.exe`. Verify redistribution terms for the supplied distributions.
+This ZIP is built from the source repository on a Windows x64 computer. From a clone,
+`windows\setup.ps1` builds it and installs it in one step; `windows\package.ps1` builds
+only the ZIP. Both are described in the repository's `docs/windows-setup.md` and
+`docs/development.md`.
 
-```powershell
-npm.cmd ci
-powershell.exe -NoProfile -File .\windows\package.ps1 `
-  -DcmtkDirectory C:\Tools\dcmtk `
-  -ImageMagickDirectory C:\Tools\ImageMagick
-```
+The bundle ships portable DCMTK and ImageMagick, `node.exe` with its `LICENSE`, and the
+gateway's production dependencies built for Windows. The packager test-converts a JPEG
+with the bundled ImageMagick before it builds, and step 1 of the setup wizard converts one
+on the site computer. It does not build or package an APK.
 
-The builder compiles gateway/UI assets, installs production dependencies in staging
-on Windows, tests the native SQLite addon, copies the runtime/tools, and generates a
-manifest, ZIP and checksum under `dist/windows/`. It does not build or package an APK.
-Do not create a Windows bundle using macOS/Linux `node_modules`.
-
-For source development on a supported computer with Node 22, DCMTK and ImageMagick:
-
-```sh
-npm ci
-npm run build
-GATEWAY_SETUP_DIR=/absolute/path/to/isolated-test-data npm run setup
-```
-
-Open `http://127.0.0.1:8081`. The developer launcher does not register an OS startup
-service; manual startup confirmation is for sites with an independently managed
-supervisor. Production Windows delivery needs a clean-machine install, reboot,
-firewall, phone and real site PACS test against the actual built ZIP. A macOS unit or
-browser pass does not verify those Windows behaviors.
+Test a new bundle on a different, clean Windows computer before sending it to a site: the
+build computer already has the tools on `PATH`, which would hide a problem in how the
+bundle finds its own. Verify redistribution terms for the supplied tool distributions.

@@ -62,6 +62,13 @@ async function step(name, fn) {
     }
 }
 
+// A check that cannot run on this platform. Counted and listed, never silently dropped.
+function skip(name, reason) {
+    const label = section ? `${section} › ${name}` : name;
+    results.push({ label, ok: true, skipped: reason });
+    console.log(`  \x1b[33m-\x1b[0m ${label} \x1b[2m(skipped: ${reason})\x1b[0m`);
+}
+
 function assert(condition, message) {
     if (!condition) throw new Error(message);
 }
@@ -98,6 +105,30 @@ function da(date) {
 
 function run(cmd, args, opts = {}) {
     return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+}
+
+// npm is npm.cmd on Windows, and Node runs a .cmd only through a shell.
+function npm(args) {
+    return run('npm', args, process.platform === 'win32' ? { shell: true } : {});
+}
+
+// Entry names from a ZIP's central directory, so the check does not need an unzip tool.
+function zipEntryNames(bytes) {
+    let end = bytes.length - 22;
+    while (end >= 0 && bytes.readUInt32LE(end) !== 0x06054b50) end--;
+    assert(end >= 0, 'no ZIP end-of-central-directory record');
+    const count = bytes.readUInt16LE(end + 10);
+    let offset = bytes.readUInt32LE(end + 16);
+    const names = [];
+    for (let i = 0; i < count; i++) {
+        assert(bytes.readUInt32LE(offset) === 0x02014b50, 'bad ZIP central directory entry');
+        const nameLength = bytes.readUInt16LE(offset + 28);
+        const extraLength = bytes.readUInt16LE(offset + 30);
+        const commentLength = bytes.readUInt16LE(offset + 32);
+        names.push(bytes.toString('utf8', offset + 46, offset + 46 + nameLength));
+        offset += 46 + nameLength + extraLength + commentLength;
+    }
+    return names;
 }
 
 function echo(ae) {
@@ -323,7 +354,7 @@ async function main() {
 
     section = 'setup';
     await step('local PACS is up (C-ECHO to DCM4CHEE and WORKLIST)', ensurePacs);
-    await step('gateway builds', () => { run('npm', ['run', 'build']); });
+    await step('gateway builds', () => { npm(['run', 'build']); });
     await step('fixtures generated (baseline JPEG, progressive JPEG, PNG)', () => { FIX = fixtures(); });
 
     const orders = {
@@ -866,7 +897,7 @@ async function main() {
         eq(res.status, 200, 'archive status'); eq(res.headers.get('content-type'), 'application/zip', 'archive type'); eq(res.headers.get('cache-control'), 'no-store', 'archive caching');
         assert(res.headers.get('content-disposition').includes(`${segmentId}.zip`), 'archive filename');
         const bytes = Buffer.from(await res.arrayBuffer()); eq([...bytes.subarray(0, 4)], [80, 75, 3, 4], 'ZIP signature');
-        const file = path.join(B.dir, 'segment.zip'); writeFileSync(file, bytes); assert(run('unzip', ['-Z1', file]).includes(`${segmentId}/manifest.json`), 'archive layout');
+        assert(zipEntryNames(bytes).includes(`${segmentId}/manifest.json`), 'archive layout');
     });
     await step('turning recording off closes the segment and persists the setting', async () => {
         const off = await B.request('PUT', '/diagnostics/recording', { body: { enabled: false } }); eq(off.status, 200, 'toggle off status'); eq(off.json.data.enabled, false, 'recording off');
@@ -897,16 +928,25 @@ async function main() {
     }
 
     section = 'shutdown';
-    await step('both gateways stop cleanly on SIGTERM', async () => {
+    if (process.platform === 'win32') {
+        // Windows has no SIGTERM: Node ends the process at once, so a graceful exit cannot be
+        // asked for. The power-cut scenario above covers an abrupt stop.
         await A.stop();
         await B.stop();
-        eq([A.proc.exitCode, B.proc.exitCode], [0, 0], 'exit codes');
-    });
+        skip('both gateways stop cleanly on SIGTERM', 'Windows cannot send SIGTERM');
+    } else {
+        await step('both gateways stop cleanly on SIGTERM', async () => {
+            await A.stop();
+            await B.stop();
+            eq([A.proc.exitCode, B.proc.exitCode], [0, 0], 'exit codes');
+        });
+    }
 }
 
 function summary() {
     const failed = results.filter((r) => !r.ok);
-    console.log(`\n${results.length - failed.length}/${results.length} passed${failed.length ? `, ${failed.length} failed` : ''}`);
+    const skipped = results.filter((r) => r.skipped);
+    console.log(`\n${results.length - failed.length - skipped.length}/${results.length} passed${skipped.length ? `, ${skipped.length} skipped` : ''}${failed.length ? `, ${failed.length} failed` : ''}`);
     if (failed.length) {
         console.log('\nfailed:');
         for (const f of failed) console.log(`  - ${f.label}`);
