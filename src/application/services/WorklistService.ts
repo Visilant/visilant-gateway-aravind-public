@@ -1,7 +1,11 @@
 import { ScreeningService } from './ScreeningService';
-import { profile } from '../../infrastructure/diagnostics';
+import { diagnosticContext, diagnostics, profile } from '../../infrastructure/diagnostics';
+import { randomUUID } from 'crypto';
+import { performance } from 'perf_hooks';
 import { Inject, Service } from 'typedi';
-import type { GatewayConfig } from '../../config';
+import type { GatewayConfig, MwlNodeConfig } from '../../config';
+import { WorklistQueryError } from '../../infrastructure/dicom/WorklistClient';
+import { WorklistExplanation, WorklistFiltersDto } from '../dto/worklist-diagnostics.dto';
 import {
     DicomJsonDataset,
     Tag,
@@ -17,6 +21,8 @@ import { ScheduledStepDto, WorklistEntryDto, WorklistQueryDto } from '../dto';
 
 @Service()
 export class WorklistService {
+    private readonly history: WorklistExplanation[] = [];
+    private probeRunning = false;
     constructor(
         @Inject(CONFIG) private readonly config: GatewayConfig,
         @Inject(LOGGER) private readonly logger: Logger,
@@ -26,38 +32,103 @@ export class WorklistService {
 
     @profile('worklist.getWorklist')
     async getWorklist(query: WorklistQueryDto = {}): Promise<WorklistEntryDto[]> {
-        const datasets = await this.worklistClient.query(this.config.mwl, {
-            // No date unless the caller asks for one. The MWL holds open orders only and
-            // the configured procedure ID already narrows it; a today-only default would
-            // hide an order booked yesterday that the patient is sitting in front of now.
-            scheduledDate: query.date,
-            patientId: query.patient_id,
-            accessionNumber: query.accession_number,
-        });
+        return (await this.explain(query, 'worklist_request')).entries;
+    }
 
-        const entries: WorklistEntryDto[] = [];
-        let unusable = 0;
+    recent(): WorklistExplanation[] { return structuredClone(this.history); }
 
-        for (const dataset of datasets) {
-            const steps = getSequence(dataset, Tag.ScheduledProcedureStepSequence);
-            for (const step of steps.length ? steps : [undefined]) {
-                const entry = this.toEntry(dataset, step);
-                if (entry) entries.push(entry);
-                else unusable++;
+    async probe(filters?: WorklistFiltersDto): Promise<WorklistExplanation> {
+        if (this.probeRunning) throw new WorklistProbeBusyError();
+        this.probeRunning = true;
+        try {
+            return (await this.explain({}, filters ? 'filter_preview' : 'gateway_probe', filters)).report;
+        } finally { this.probeRunning = false; }
+    }
+
+    private async explain(query: WorklistQueryDto, source: WorklistExplanation['source'], filters?: WorklistFiltersDto) {
+        const started = performance.now();
+        const node: MwlNodeConfig = { ...this.config.mwl, ...(filters ? Object.fromEntries(Object.entries(filters).map(([key, value]) => [key, value.trim()])) : {}) };
+        const report: WorklistExplanation = {
+            id: randomUUID(), request_id: diagnosticContext.getStore()?.request_id ?? null,
+            started_at: new Date().toISOString(), duration_ms: 0, source, stage: 'query', outcome: 'failed', error_code: null,
+            counts: { extracted_files: null, converted_files: 0, invalid_json: 0, parsed_datasets: 0, candidate_rows: 0,
+                accepted_rows: 0, rejected_rows: 0, missing_accession: 0, missing_patient_id: 0, missing_both: 0,
+                derived_study_uid: 0, hidden_completed_rows: null, returned_rows: null },
+            filters: { procedure: !!node.requested_procedure_id, modality: !!node.modality, station: !!node.scheduled_station_ae,
+                date: !!query.date, patient: !!query.patient_id, accession: !!query.accession_number },
+            phone_display: 'not_observed', hospital_completion: 'not_integrated', recording: diagnostics.enabled,
+        };
+        const counts = report.counts;
+        try {
+            const datasets = await this.worklistClient.query(node, {
+                // No date unless the caller asks for one. The MWL holds open orders only and
+                // the configured procedure ID already narrows it; a today-only default would
+                // hide an order booked yesterday that the patient is sitting in front of now.
+                scheduledDate: query.date,
+                patientId: query.patient_id,
+                accessionNumber: query.accession_number,
+            }, conversion => Object.assign(counts, conversion));
+            counts.parsed_datasets = datasets.length;
+            report.stage = 'mapping';
+
+            const entries: WorklistEntryDto[] = [];
+            let unusable = 0;
+
+            for (const dataset of datasets) {
+                const steps = getSequence(dataset, Tag.ScheduledProcedureStepSequence);
+                for (const step of steps.length ? steps : [undefined]) {
+                    counts.candidate_rows++;
+                    const entry = this.toEntry(dataset, step);
+                    if (entry) {
+                        entries.push(entry);
+                        counts.accepted_rows++;
+                        if (!getString(dataset, Tag.StudyInstanceUID)) counts.derived_study_uid++;
+                    } else {
+                        unusable++;
+                        counts.rejected_rows++;
+                        const accession = !!getString(dataset, Tag.AccessionNumber), patient = !!getString(dataset, Tag.PatientID);
+                        if (!accession && !patient) counts.missing_both++;
+                        else if (!accession) counts.missing_accession++;
+                        else counts.missing_patient_id++;
+                    }
+                }
             }
-        }
 
-        if (unusable > 0) {
-            // Counted, never described: the contents are PHI. An entry missing any of
-            // these cannot be captured against, so returning it would only produce a
-            // row in the app that fails at the moment someone takes a photo.
-            this.logger.warn(
-                `worklist: skipped ${unusable} entr${unusable === 1 ? 'y' : 'ies'} ` +
-                `missing an accession number or patient ID`
-            );
-        }
+            if (unusable > 0) {
+                // Counted, never described: the contents are PHI. An entry missing any of
+                // these cannot be captured against, so returning it would only produce a
+                // row in the app that fails at the moment someone takes a photo.
+                this.logger.warn(
+                    `worklist: skipped ${unusable} entr${unusable === 1 ? 'y' : 'ies'} ` +
+                    `missing an accession number or patient ID`
+                );
+            }
 
-        return this.screenings.filter(entries);
+            counts.accepted_rows = entries.length;
+            counts.rejected_rows = unusable;
+            report.stage = 'screening_filter';
+            const result = await this.screenings.filter(entries, source === 'worklist_request');
+            counts.hidden_completed_rows = entries.length - result.length;
+            counts.returned_rows = result.length;
+            report.stage = 'complete';
+            report.outcome = result.length ? 'rows_available' : entries.length ? 'all_completed' :
+                counts.candidate_rows || counts.invalid_json ? 'no_usable_rows' : 'no_matches';
+            return { entries: result, report };
+        } catch (error) {
+            if (error instanceof WorklistQueryError) { report.stage = error.stage; report.error_code = error.code; }
+            else report.error_code = report.stage === 'screening_filter' ? 'SCREENING_FILTER_FAILED' :
+                report.stage === 'mapping' ? 'ROW_MAPPING_FAILED' : 'MWL_QUERY_FAILED';
+            if (source === 'worklist_request') throw error;
+            return { entries: [], report };
+        } finally {
+            report.duration_ms = Math.round(performance.now() - started);
+            this.history.unshift(report);
+            this.history.splice(20);
+            // Values are deliberately absent. Record only counts, presence and generated IDs.
+            diagnostics.event('worklist.explanation', { check_id: report.id, ...counts, stage: report.stage,
+                source, status: report.outcome, error_code: report.error_code,
+                ...Object.fromEntries(Object.entries(report.filters).map(([key, value]) => [`filter_${key}`, value])) }, report.duration_ms, report.outcome === 'failed' ? 'error' : 'ok');
+        }
     }
 
     // Null when the accession or patient ID is missing; see the skipped-entry warning above.
@@ -86,6 +157,10 @@ export class WorklistService {
 
         return entry;
     }
+}
+
+export class WorklistProbeBusyError extends Error {
+    constructor() { super('A gateway worklist check is already running. Wait for it to finish.'); }
 }
 
 function toScheduledStep(step: DicomJsonDataset): ScheduledStepDto {

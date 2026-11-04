@@ -117,6 +117,34 @@ recovery behavior. Task Scheduler restarts the launcher after failure. Port 8081
 prevents a second launcher from starting another gateway. Do not separately run
 `npm start` against the same installed state.
 
+## Worklist debugging and cleanup
+
+Sign in to the operator dashboard and open **Diagnostics → Explain this worklist** to see
+why an order is missing. Refresh the phone once, then **Refresh results**. A separate
+**Run gateway-only check** helps inspect the hospital response without changing screening
+state. An administrator can preview and save station, procedure and modality filters;
+saved filters survive restart and override those fields in the config file.
+A missing order number requires the hospital MWL to supply the real imaging order ID in
+Accession Number. Filter changes cannot invent that value.
+
+The extracted bundle includes `uninstall.ps1` and `uninstall.sh`. From a separate bundle
+folder, use PowerShell as administrator:
+
+```powershell
+# Preview only:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+# Remove installed program/task/firewall/shortcut, preserving saved data:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 -Apply
+```
+
+For an explicitly authorized full test reset, add `-PurgeData -DataDeletionConfirmation
+'DELETE GATEWAY DATA'`. This permanently erases accounts, settings and unsent photographs.
+Git Bash has the equivalent `bash uninstall.sh --apply --purge-data --confirm-delete-data`.
+Without `--apply` it previews only. The scripts target standard installation paths and
+refuse linked paths or unexpected task/rule ownership. Custom data paths stay untouched.
+Keeping data requires the backup/repair installation procedure; normal setup does not
+overwrite retained data. Never purge a hospital gateway as a routine debugging step.
+
 ## Logs and troubleshooting
 
 Both the launcher and the gateway write to the console and to a rotating file in

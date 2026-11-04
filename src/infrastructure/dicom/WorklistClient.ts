@@ -6,7 +6,7 @@ import { Inject, Service } from 'typedi';
 import type { MwlNodeConfig } from '../../config';
 import { LOGGER } from '../../tokens';
 import type { Logger } from '../logger';
-import { DicomClient } from './DicomClient';
+import { DicomClient, DicomTimeoutError, ToolMissingError } from './DicomClient';
 import { BIN, NETWORK_TIMEOUT_MS } from './dicom.constants';
 import { DicomJsonDataset, Tag, toCommandLineTag } from './dicom.tags';
 
@@ -42,6 +42,13 @@ export interface WorklistQuery {
     accessionNumber?: string;
 }
 
+export interface WorklistConversionCounts { extracted_files: number | null; converted_files: number; invalid_json: number; parsed_datasets: number }
+export class WorklistQueryError extends Error {
+    constructor(readonly code: string, readonly stage: 'query' | 'conversion') {
+        super(`Worklist ${stage} failed. Open Diagnostics → Explain this worklist for the next check.`);
+    }
+}
+
 // Reads the modality worklist over C-FIND.
 //
 // Nothing is persisted: the RIS is the source of truth for what is scheduled, and the
@@ -54,10 +61,12 @@ export class WorklistClient extends DicomClient {
     }
 
     @profile('worklist.query')
-    async query(node: MwlNodeConfig, query: WorklistQuery = {}): Promise<DicomJsonDataset[]> {
+    async query(node: MwlNodeConfig, query: WorklistQuery = {}, observe?: (counts: WorklistConversionCounts) => void): Promise<DicomJsonDataset[]> {
         // Every response file holds patient demographics, so the whole directory is
         // temporary and removed in the finally below, success or not.
         const work = await fs.mkdtemp(path.join(os.tmpdir(), 'visilant-mwl-'));
+        const counts: WorklistConversionCounts = { extracted_files: null, converted_files: 0, invalid_json: 0, parsed_datasets: 0 };
+        let stage: 'query' | 'conversion' = 'query';
 
         try {
             await this.run(
@@ -69,8 +78,10 @@ export class WorklistClient extends DicomClient {
             );
 
             const files = (await fs.readdir(work)).filter((name) => name.endsWith('.dcm')).sort();
+            counts.extracted_files = files.length;
             diagnostics.event('worklist.responses', { count: files.length });
             const datasets: DicomJsonDataset[] = [];
+            stage = 'conversion';
 
             for (const file of files) {
                 const json = await this.run(
@@ -79,9 +90,14 @@ export class WorklistClient extends DicomClient {
                     'dcm2json',
                     NETWORK_TIMEOUT_MS
                 );
+                counts.converted_files++;
                 try {
-                    datasets.push(JSON.parse(json) as DicomJsonDataset);
+                    const dataset: unknown = JSON.parse(json);
+                    if (!dataset || typeof dataset !== 'object' || Array.isArray(dataset)) throw new Error('Invalid dataset');
+                    datasets.push(dataset as DicomJsonDataset);
+                    counts.parsed_datasets++;
                 } catch {
+                    counts.invalid_json++;
                     // One malformed response should not lose the rest of the worklist.
                     // No detail is logged: the payload is PHI.
                     this.logger.error('worklist: discarded a response that was not valid DICOM JSON');
@@ -89,7 +105,12 @@ export class WorklistClient extends DicomClient {
             }
 
             return datasets;
+        } catch (error) {
+            throw new WorklistQueryError(error instanceof ToolMissingError ? 'MWL_TOOL_UNAVAILABLE' :
+                error instanceof DicomTimeoutError ? 'MWL_TIMEOUT' :
+                    stage === 'conversion' ? 'MWL_CONVERSION_FAILED' : 'MWL_QUERY_FAILED', stage);
         } finally {
+            observe?.({ ...counts });
             await fs.rm(work, { recursive: true, force: true });
         }
     }

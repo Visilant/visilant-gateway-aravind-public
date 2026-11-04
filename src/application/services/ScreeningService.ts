@@ -144,8 +144,9 @@ export class ScreeningService {
     // Removes completed orders from a live worklist and annotates the rest with their
     // submission status. A failure here fails the refresh closed rather than returning
     // the unfiltered list.
-    async filter(entries: WorklistEntryDto[]): Promise<WorklistEntryDto[]> {
-        await this.reconcile();
+    async filter(entries: WorklistEntryDto[], reconcile = true): Promise<WorklistEntryDto[]> {
+        // A diagnostic probe reads recorded completion without changing clinical state.
+        if (reconcile) await this.reconcile();
         const scope = sourceScope(this.config);
         const keys = entries.map(entry => orderKey(scope, entryOrder(entry)));
         const records = new Map((await this.repository.findByOrderKeys([...new Set(keys)])).map(r => [r.order_key, r]));

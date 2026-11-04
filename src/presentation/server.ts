@@ -1,4 +1,5 @@
 import { performance } from 'perf_hooks';
+import { randomUUID } from 'crypto';
 import { diagnosticContext, diagnosticId, diagnostics } from '../infrastructure/diagnostics';
 import express from 'express';
 import { existsSync } from 'fs';
@@ -17,6 +18,7 @@ import { ErrorHandlerMiddleware } from './middlewares';
 import { SetupController } from './controllers/setup.controller';
 import { SetupVerificationService } from '../application/services/SetupVerificationService';
 import { isLoopback } from '../setup/security';
+import { WorklistDiagnosticsController } from './controllers/worklist-diagnostics.controller';
 
 @Service()
 export class GatewayServer {
@@ -38,7 +40,8 @@ export class GatewayServer {
         app.disable('x-powered-by');
         app.use((req, res, next) => {
             const start = performance.now();
-            const context = { started_ms: start, run_id: diagnosticId(req.headers['x-diagnostic-run-id']), operation_id: diagnosticId(req.headers['x-diagnostic-operation-id']), request_id: diagnosticId(req.headers['x-diagnostic-request-id']) };
+            const context = { started_ms: start, run_id: diagnosticId(req.headers['x-diagnostic-run-id']), operation_id: diagnosticId(req.headers['x-diagnostic-operation-id']), request_id: diagnosticId(req.headers['x-diagnostic-request-id']) ?? randomUUID() };
+            res.setHeader('x-diagnostic-request-id', context.request_id);
             diagnosticContext.run(context, () => {
                 let completed = false;
                 const finish = (aborted: boolean) => {
@@ -75,16 +78,16 @@ export class GatewayServer {
         }
 
         useExpressServer(app, {
-            controllers: [SetupController, AuthController, HealthController, SystemController, WorklistController, CaptureController, DiagnosticsController, DicomPreviewController, ScreeningController],
+            controllers: [SetupController, AuthController, HealthController, SystemController, WorklistController, CaptureController, DiagnosticsController, WorklistDiagnosticsController, DicomPreviewController, ScreeningController],
             middlewares: [ErrorHandlerMiddleware],
             interceptors: [ResponseEnvelopeInterceptor],
 
             // @Authorized() routes resolve through here. Rejecting returns 401 without
             // the handler ever running.
-            authorizationChecker: async (action) => {
+            authorizationChecker: async (action, roles) => {
                 const user = await this.authenticate(action.request.headers.authorization);
                 action.request.user = user ?? undefined;
-                return user !== null;
+                return user !== null && (!roles.length || roles.includes(user.role));
             },
             // Supplies @CurrentUser() — which is how a capture records who took it.
             currentUserChecker: async (action) => {

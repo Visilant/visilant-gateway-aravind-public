@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 
 // The binary is missing or its installation is broken: a fault on this box, never the input's.
 export class ToolMissingError extends Error {}
+export class DicomTimeoutError extends Error {}
 
 // Adapter over the DCMTK CLIs. No business logic — it performs transfers and reports
 // what the tools said.
@@ -48,7 +49,9 @@ export class DicomClient {
         } catch (err: unknown) {
             const detail = describeFailure(err, bin, timeoutMs);
             this.logger.error(`DICOM ${step} failed: ${detail}`);
-            const Failure = (err as { code?: unknown }).code === 'ENOENT' ? ToolMissingError : Error;
+            const failure = err as { code?: unknown; killed?: boolean; signal?: string };
+            const Failure = failure.code === 'ENOENT' ? ToolMissingError :
+                failure.killed || failure.signal === 'SIGTERM' ? DicomTimeoutError : Error;
             throw new Failure(`DICOM ${step} failed: ${detail}`);
         }
     }

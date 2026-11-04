@@ -41,7 +41,12 @@ Recommended: Aravind IT schedules the anterior-segment orders for this device to
 `"scheduled_station_ae": "VISILANT"` in `mwl` and **remove** the `requested_procedure_id`
 key (an empty string `""` stops the gateway from starting). See [worklist.md](worklist.md#the-three-filters).
 
-To see how Freedom codes its orders, run the `findscu` test in
+Use **Diagnostics → Explain this worklist** to check why rows are missing and preview
+filter changes before saving them. If an anterior order has an empty Accession Number,
+ask AEH to populate `(0008,0050)` with its unique imaging order ID. A saved filter cannot
+recover an ID that Freedom never sends. Numeric strings already work.
+
+To inspect the actual procedure fields locally, run the `findscu` test in
 [worklist.md](worklist.md#test-the-worklist-by-hand) on the gateway computer with
 `-aec FREEDOM_MWL`.
 

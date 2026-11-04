@@ -1,3 +1,5 @@
+import { diagnosticContext, diagnostics } from '../src/infrastructure/diagnostics';
+import { WorklistQueryError } from '../src/infrastructure/dicom/WorklistClient';
 import type { GatewayConfig } from '../src/config';
 import { DicomJsonDataset } from '../src/infrastructure/dicom';
 import { WorklistService } from '../src/application/services/WorklistService';
@@ -134,5 +136,78 @@ describe('WorklistService', () => {
         expect('patient_birth_date' in wire).toBe(false);
         expect('scheduled' in wire).toBe(false);
         expect(wire.accession_number).toBe('ACC001');
+    });
+});
+
+
+describe('worklist explanations', () => {
+    it('splits missing-field reasons, expands steps and reconciles all row counts without identifiers', async () => {
+        const missingAccession = { ...FULL, '00080050': { vr: 'SH', Value: [''] } };
+        const missingPatient = { ...FULL, '00100020': { vr: 'LO' } };
+        const both = { ...missingAccession, '00100020': { vr: 'LO' } };
+        const multi = { ...FULL, '00400100': { vr: 'SQ', Value: [{}, {}] } };
+        const { svc } = service([missingAccession, missingPatient, both, multi]);
+        const event = jest.spyOn(diagnostics, 'event');
+        try {
+            expect(await svc.getWorklist()).toHaveLength(2);
+            const [report] = svc.recent();
+            expect(report.counts).toMatchObject({ parsed_datasets: 4, candidate_rows: 5, accepted_rows: 2,
+                rejected_rows: 3, missing_accession: 1, missing_patient_id: 1, missing_both: 1, hidden_completed_rows: 0, returned_rows: 2 });
+            expect(JSON.stringify([report, event.mock.calls])).not.toMatch(/ACC001|MRN100991|DEVI|19640127|1\.2\.3\.4\.5/);
+        } finally { event.mockRestore(); }
+    });
+    it.each(['98', '00098'])('preserves accession %s through the ordinary and diagnostic paths', async accession => {
+        const { svc } = service([{ ...FULL, '00080050': { vr: 'SH', Value: [accession] } }]);
+        expect((await svc.getWorklist())[0].accession_number).toBe(accession);
+        expect((await svc.probe()).counts.returned_rows).toBe(1);
+    });
+    it('reads completion during a probe, while ordinary requests retain reconciliation', async () => {
+        const filter = jest.fn().mockResolvedValue([]);
+        const svc = new WorklistService(config, logger as never, { query: async () => [FULL] } as never, { filter } as never);
+        const report = await svc.probe();
+        expect(report).toMatchObject({ source: 'gateway_probe', outcome: 'all_completed', counts: { hidden_completed_rows: 1, returned_rows: 0 } });
+        expect(filter.mock.calls[0][1]).toBe(false);
+        await svc.getWorklist();
+        expect(filter.mock.calls[1][1]).toBe(true);
+    });
+    it('does not turn a completion-store error into an empty successful list', async () => {
+        const filter = jest.fn().mockRejectedValue(new Error('SENSITIVE-MESSAGE'));
+        const svc = new WorklistService(config, logger as never, { query: async () => [FULL] } as never, { filter } as never);
+        await expect(svc.getWorklist()).rejects.toThrow('SENSITIVE-MESSAGE');
+        expect(svc.recent()[0]).toMatchObject({ outcome: 'failed', stage: 'screening_filter', error_code: 'SCREENING_FILTER_FAILED', counts: { returned_rows: null } });
+        expect(JSON.stringify(svc.recent())).not.toContain('SENSITIVE');
+    });
+    it('distinguishes no matching files, malformed JSON and failed conversion', async () => {
+        const { svc, client } = service([]);
+        expect((await svc.probe()).outcome).toBe('no_matches');
+        client.query.mockImplementationOnce(async (_node, _query, observe) => { observe({ extracted_files: 1, converted_files: 1, invalid_json: 1 }); return []; });
+        expect(await svc.probe()).toMatchObject({ outcome: 'no_usable_rows', counts: { invalid_json: 1 } });
+        client.query.mockRejectedValueOnce(new WorklistQueryError('MWL_CONVERSION_FAILED', 'conversion'));
+        expect(await svc.probe()).toMatchObject({ outcome: 'failed', stage: 'conversion', error_code: 'MWL_CONVERSION_FAILED' });
+    });
+    it('previews a replacement filter set without changing config or allowing overlapping probes', async () => {
+        const { svc, client } = service([]);
+        let finish!: (rows: DicomJsonDataset[]) => void;
+        client.query.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const pending = svc.probe({ requested_procedure_id: '', modality: '', scheduled_station_ae: ' TEST ' });
+        await expect(svc.probe()).rejects.toThrow('already running');
+        finish([]);
+        expect(await pending).toMatchObject({ source: 'filter_preview', filters: { station: true, modality: false, procedure: false } });
+        expect(client.query.mock.calls[0][0].scheduled_station_ae).toBe('TEST');
+        expect(config.mwl.scheduled_station_ae).toBeUndefined();
+    });
+    it('keeps concurrent request evidence separate and bounds the history', async () => {
+        const { svc, client } = service([]);
+        let finish!: (rows: DicomJsonDataset[]) => void;
+        client.query.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const first = diagnosticContext.run({ request_id: '11111111-1111-1111-1111-111111111111' }, () => svc.getWorklist());
+        await diagnosticContext.run({ request_id: '22222222-2222-2222-2222-222222222222' }, () => svc.getWorklist());
+        finish([FULL]); await first;
+        expect(svc.recent()[0]).toMatchObject({ request_id: '11111111-1111-1111-1111-111111111111', counts: { returned_rows: 1 } });
+        expect(svc.recent()[1]).toMatchObject({ request_id: '22222222-2222-2222-2222-222222222222', counts: { returned_rows: 0 } });
+        const copy = svc.recent(); copy[0].counts.returned_rows = 999;
+        expect(svc.recent()[0].counts.returned_rows).toBe(1);
+        for (let i = 0; i < 25; i++) await svc.getWorklist();
+        expect(svc.recent()).toHaveLength(20);
     });
 });

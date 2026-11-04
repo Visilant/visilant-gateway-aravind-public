@@ -183,8 +183,12 @@ accounts and every photograph that has not reached the PACS yet.
 
 ## Change settings later
 
-After the account is created the wizard locks the settings. To change them, for example to
-move from a test PACS to the real one:
+After the account is created the wizard locks its settings. To change worklist filters,
+sign in to the dashboard as administrator and use **Diagnostics → Explain this worklist**.
+Preview, save, and restore filters there without restarting. See [configuration.md](configuration.md#change-worklist-filters-in-the-dashboard)
+for persistence and config-file overrides.
+
+For other settings, for example moving from a test PACS to the real one:
 
 1. Open Notepad **as administrator** and open `C:\ProgramData\Visilant\config.json`.
 2. Change the values. The names are explained in [configuration.md](configuration.md).
@@ -200,25 +204,47 @@ update it**. It only reopens the wizard, so that a working site is never overwri
 accident. To update an installed gateway, follow
 [troubleshooting.md](troubleshooting.md#updating-an-installed-gateway).
 
-## Start again on a test computer
+## Remove a prior installation
 
-Only on a **test** computer that has only ever seen made-up patients. **Never on a gateway
-at a hospital:** this deletes its settings, accounts and every photograph not yet in the
-PACS.
+Use the cleanup script on the gateway's Windows computer. It checks the exact gateway
+folder, startup task, firewall rule and desktop shortcut before removing them. It refuses
+unrecognized installations, changed task/rule ownership, and linked directories. It does
+not remove source clones, `C:\Tools`, other Node processes or the parent Visilant program
+folder. Run it from the source checkout or the extracted bundle, outside the installed
+application folder.
 
-The setup command never replaces an installed gateway. To install again from nothing,
-remove the old one first. In PowerShell **as administrator**:
+In **PowerShell as administrator**, preview first:
 
 ```powershell
-Stop-ScheduledTask -TaskName 'Visilant InSight-Gateway' -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName 'Visilant InSight-Gateway' -Confirm:$false -ErrorAction SilentlyContinue
-Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$env:ProgramFiles\Visilant\*" } | Stop-Process -Force
-Remove-NetFirewallRule -DisplayName 'Visilant InSight-Gateway' -ErrorAction SilentlyContinue
-Remove-Item "$env:ProgramFiles\Visilant", "$env:ProgramData\Visilant" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:PUBLIC\Desktop\Gateway Setup.url" -Force -ErrorAction SilentlyContinue
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\uninstall.ps1
 ```
 
-Then run the setup command from Step 3 again.
+Add `-Apply` to remove the application and its Windows integration while **keeping all
+saved data**. This is an uninstall, not an upgrade: the normal installer refuses a partial
+installation containing retained data. For an upgrade, use the consistent backup/repair
+procedure in [troubleshooting.md](troubleshooting.md#updating-an-installed-gateway).
+
+For a deliberately authorized **full reset of a test computer**, this permanently deletes
+settings, accounts, logs, diagnostic recordings under the data folder and unsent photographs:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\uninstall.ps1 -Apply -PurgeData -DataDeletionConfirmation 'DELETE GATEWAY DATA'
+```
+
+The same script has a **Git Bash** entry point. Open Git Bash as administrator and run:
+
+```bash
+bash windows/uninstall.sh
+bash windows/uninstall.sh --apply
+# Full reset only; erases unsent photographs too:
+bash windows/uninstall.sh --apply --purge-data --confirm-delete-data
+```
+
+With no `--apply`, Bash also previews only. It refuses to run on macOS, Linux or WSL;
+use Git Bash on the actual Windows gateway. From an extracted bundle, omit `windows/`
+or `windows\` from these commands. Custom storage, database or diagnostic paths outside
+`C:\ProgramData\Visilant` are left in place and must be reviewed separately by IT.
+After a full reset, run the setup command from Step 3 again.
 
 ## Next
 

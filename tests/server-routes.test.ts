@@ -12,13 +12,18 @@ import { CONFIG, DATABASE, LOGGER, RECORDER } from '../src/tokens';
 import { GatewayServer } from '../src/presentation/server';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
 import { DiagnosticRecorder } from '../src/infrastructure/diagnostics';
+import { WorklistClient } from '../src/infrastructure/dicom';
 
 let server: Server, database: DataSource, base: string, directory: string, recorder: DiagnosticRecorder;
 beforeAll(async () => {
     database = new DataSource(buildDataSourceOptions(':memory:')); await database.initialize(); await database.runMigrations();
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gw-routes-'));
-    Container.set(CONFIG, Object.assign(new GatewayConfig(), { listen_port: 0, storage_root: directory }));
-    Container.set(AuthService, { authenticate: async (header: string) => header === 'Bearer test' ? { id: 'test' } : null } as never);
+    Container.set(CONFIG, Object.assign(new GatewayConfig(), { listen_port: 0, storage_root: directory,
+        mwl: { host: 'synthetic', port: 104, called_ae: 'MWL', calling_ae: 'GATEWAY' } }));
+    Container.set(AuthService, { authenticate: async (header: string) => header === 'Bearer test' ? { id: 'test', role: 'OPERATOR' } :
+        header === 'Bearer admin' ? { id: 'admin', role: 'ADMIN' } : null } as never);
+    Container.set(WorklistClient, { query: async () => [{ '00100020': { vr: 'LO', Value: ['CANARY-PATIENT-ID'] },
+        '00100010': { vr: 'PN', Value: [{ Alphabetic: 'CANARY^NAME' }] } }] } as never);
     Container.set(DATABASE, database); recorder = new DiagnosticRecorder(); Container.set(RECORDER, recorder);
     Container.set(LOGGER, { info: jest.fn(), warn: jest.fn(), error: jest.fn() } as never);
     server = await Container.get(GatewayServer).start(); base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -64,4 +69,50 @@ test('setup progress is private and completion cannot be asserted without observ
         expect(absent.status).toBe(400);
         expect(JSON.stringify(await absent.json())).not.toMatch(/token|synthetic_confirmation\b.*startup/);
     } finally { if (prior === undefined) delete process.env.GATEWAY_SETUP_TOKEN; else process.env.GATEWAY_SETUP_TOKEN = prior; }
+});
+
+test('worklist diagnosis is authenticated, read-only, correlated and contains no patient values', async () => {
+    for (const route of ['/diagnostics/worklist', '/diagnostics/worklist/settings', '/diagnostics/worklist/support']) {
+        expect((await fetch(base + route)).status).toBe(401);
+    }
+    const headers = { Authorization: 'Bearer test' };
+    expect((await fetch(base + '/diagnostics/worklist/check', { method: 'POST' })).status).toBe(401);
+    const response = await fetch(base + '/worklist', { headers });
+    expect(await response.json()).toEqual({ data: [] });
+    const correlation = response.headers.get('x-diagnostic-request-id');
+    expect(correlation).toMatch(/^[a-f0-9-]{36}$/);
+    const report = await fetch(base + '/diagnostics/worklist', { headers });
+    expect(report.headers.get('cache-control')).toBe('no-store');
+    const body = await report.json() as { data: { checks: unknown[] } };
+    expect(body.data.checks[0]).toMatchObject({ request_id: correlation, source: 'worklist_request', counts: { missing_accession: 1, returned_rows: 0 } });
+    const support = await fetch(base + '/diagnostics/worklist/support', { headers });
+    expect(support.headers.get('content-disposition')).toContain('gateway-worklist-support.json');
+    expect(support.headers.get('cache-control')).toBe('no-store');
+    expect(await support.text()).not.toMatch(/CANARY|synthetic|storage_root|authorization|database_path/);
+});
+
+test('only admins can preview and change filters; malformed and stale saves cannot apply', async () => {
+    const admin = { Authorization: 'Bearer admin', 'Content-Type': 'application/json' };
+    const operator = { ...admin, Authorization: 'Bearer test' };
+    const snapshot = async () => (await (await fetch(base + '/diagnostics/worklist/settings', { headers: admin })).json() as { data: { revision: string; filters: unknown } }).data;
+    const before = await snapshot();
+    const filters = { requested_procedure_id: '', modality: '', scheduled_station_ae: 'VISILANT' };
+    for (const [path, method, body] of [
+        ['/preview', 'POST', filters], ['/settings', 'PUT', { ...filters, revision: before.revision }],
+        ['/settings/reset', 'POST', { ...filters, revision: before.revision }],
+    ] as const) {
+        expect((await fetch(base + '/diagnostics/worklist' + path, { method, headers: operator, body: JSON.stringify(body) })).status).toBe(403);
+    }
+    const invalid = await fetch(base + '/diagnostics/worklist/settings', { method: 'PUT', headers: admin,
+        body: JSON.stringify({ ...filters, modality: 'SENSITIVE-CANARY-TOO-LONG', revision: before.revision, arbitrary: 'value' }) });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.text()).not.toContain('SENSITIVE-CANARY');
+    expect(await snapshot()).toEqual(before);
+    const preview = await fetch(base + '/diagnostics/worklist/preview', { method: 'POST', headers: admin, body: JSON.stringify(filters) });
+    expect(preview.status).toBe(200);
+    expect(await snapshot()).toEqual(before);
+    const saved = await fetch(base + '/diagnostics/worklist/settings', { method: 'PUT', headers: admin, body: JSON.stringify({ ...filters, revision: before.revision }) });
+    expect(saved.status).toBe(200);
+    expect((await snapshot()).filters).toEqual(filters);
+    expect((await fetch(base + '/diagnostics/worklist/settings', { method: 'PUT', headers: admin, body: JSON.stringify({ ...filters, revision: before.revision }) })).status).toBe(409);
 });

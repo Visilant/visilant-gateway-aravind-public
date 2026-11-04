@@ -30,6 +30,7 @@ if (Test-Path -LiteralPath $firewallScript) {
 $env:GATEWAY_MANAGED_STARTUP = '1'
 $build = Get-Content (Join-Path $PSScriptRoot 'manifest.json') -Raw | ConvertFrom-Json
 $env:GATEWAY_BUILD_ID = $build.source_commit + ' / ' + $build.built_at
+if ($build.working_tree_dirty) { $env:GATEWAY_BUILD_ID += ' (modified)' }
 # Resolve packaged tools explicitly; inherited per-user overrides must not select a
 # different executable when Task Scheduler runs as SYSTEM.
 foreach ($tool in @('echoscu','findscu','storescu','img2dcm','dcm2json','dcmdump','dcmodify')) {

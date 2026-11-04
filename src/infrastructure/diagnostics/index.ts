@@ -10,6 +10,11 @@ const ids = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export function diagnosticId(value: unknown): string | null { return typeof value === 'string' && ids.test(value) ? value.toLowerCase() : null; }
 export const diagnosticContext = new AsyncLocalStorage<Correlation>();
 const allowed = new Set(['bytes','count','attempt','status','stage','model','threads','baseline','due','deferred','pending','sending','sent','failed','oldest_age_ms','queue_wait_ms','elapsed_ms','width','height','duplicates','batch_size','cpu_percent','rss_bytes','heap_used_bytes','heap_total_bytes','external_bytes','event_loop_p95_ms','free_bytes','database_bytes','row_count','error_code','route','method','dropped_events','process_cpu_unavailable','child_resources_unavailable']);
+// Worklist explanations contain only generated references, counters and filter presence.
+for (const key of ['check_id', 'source', 'extracted_files', 'converted_files', 'invalid_json', 'parsed_datasets',
+    'candidate_rows', 'accepted_rows', 'rejected_rows', 'missing_accession', 'missing_patient_id', 'missing_both',
+    'derived_study_uid', 'hidden_completed_rows', 'returned_rows', 'filter_procedure', 'filter_modality',
+    'filter_station', 'filter_date', 'filter_patient', 'filter_accession']) allowed.add(key);
 export function safeAttributes(input: Record<string, unknown>): Record<string, string | number | boolean | null> {
     const out: Record<string, string | number | boolean | null> = {};
     for (const [key, value] of Object.entries(input)) {

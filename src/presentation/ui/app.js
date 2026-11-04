@@ -142,7 +142,7 @@
   };
   views.config = async () => {
     const snapshot = await api('/system/config');
-    return `<h1>Config</h1>${kv(flatten(snapshot.config).sort(([a], [b]) => a.localeCompare(b)))}<h2>Runtime</h2>${kv([['node_version', snapshot.node_version], ['package_version', snapshot.package_version], ['uptime_seconds', uptime(snapshot.uptime_seconds)], ['diagnostics_env_dir', snapshot.diagnostics_env_dir]])}`;
+    return `<h1>Config</h1><p><a href="#/diagnostics/worklist">Inspect and change worklist filters</a></p>${kv(flatten(snapshot.config).sort(([a], [b]) => a.localeCompare(b)))}<h2>Runtime</h2>${kv([['node_version', snapshot.node_version], ['package_version', snapshot.package_version], ['uptime_seconds', uptime(snapshot.uptime_seconds)], ['diagnostics_env_dir', snapshot.diagnostics_env_dir]])}`;
   };
   views.device = async () => {
     const device = await api('/system/device');
@@ -159,9 +159,10 @@
   const captureRefs = captures => captures.length ? captures.map(row => `${linkCapture(row.id)} <span class="muted">${esc(row.status)}</span>`).join(' · ') : '—';
   const segmentLink = id => `<a class="mono" href="#/diagnostics/segments/${esc(pathId(id))}">${esc(id)}</a>`;
   views.diagnostics = async rest => {
+    if (rest[0] === 'worklist') return worklistDiagnostics();
     if (!rest.length) {
       const result = await api('/diagnostics'), recording = result.recording;
-      return `<h1>Diagnostics</h1><div class="toolbar"><span>${esc(recording.enabled ? `Recording on at ${recording.directory}` : 'Recording off')}</span>${recording.locked_by === 'env' ? '<span class="muted">Controlled by GATEWAY_DIAGNOSTICS_DIR on this process</span>' : `<button data-action="recording" data-enabled="${esc(!recording.enabled)}">${esc(recording.enabled ? 'Turn off' : 'Turn on')}</button>`}</div>
+      return `<h1>Diagnostics</h1><p><a href="#/diagnostics/worklist">Explain this worklist</a> — find out why an order is missing.</p><div class="toolbar"><span>${esc(recording.enabled ? `Recording on at ${recording.directory}` : 'Recording off')}</span>${recording.locked_by === 'env' ? '<span class="muted">Controlled by GATEWAY_DIAGNOSTICS_DIR on this process</span>' : `<button data-action="recording" data-enabled="${esc(!recording.enabled)}">${esc(recording.enabled ? 'Turn off' : 'Turn on')}</button>`}</div>
         <table class="rows"><thead><tr><th>Segment</th><th>Status</th><th>Started</th><th class="num">Bytes</th><th class="num">Dropped</th><th></th></tr></thead><tbody>${result.segments.map(segment => `<tr><td>${segmentLink(segment.id)}</td><td>${esc(segment.active ? 'recording' : segment.status)}</td><td>${esc(date(segment.started_at))}</td><td class="num">${esc(fmtBytes(segment.bytes))}</td><td class="num">${esc(segment.dropped_events)}</td><td><button data-action="archive" data-id="${esc(segment.id)}">Download</button></td></tr>`).join('')}</tbody></table>${result.segments.length ? '' : '<p class="muted">No recorded segments.</p>'}`;
     }
     if (rest.length === 2 && rest[0] === 'segments') {
@@ -175,6 +176,73 @@
     }
     throw new ApiError('Diagnostic page not found', 404);
   };
+
+  const checkSources = { worklist_request: 'Worklist API request (phone or other client)', gateway_probe: 'Gateway-only check', filter_preview: 'Filter preview' };
+  const checkOutcomes = { rows_available: 'Usable orders found', no_usable_rows: 'Orders could not be used', no_matches: 'No matching orders received', all_completed: 'All usable orders already completed locally', failed: 'Check did not finish' };
+  const checkErrors = {
+    MWL_TOOL_UNAVAILABLE: 'A DICOM tool could not start. Ask IT to check the installed gateway tools.',
+    MWL_TIMEOUT: 'The hospital query timed out. Ask IT to check the network and worklist server.',
+    MWL_QUERY_FAILED: 'The hospital worklist query failed. Ask IT to check the server address, port and registered gateway AE title.',
+    MWL_CONVERSION_FAILED: 'A hospital response could not be converted. Ask support to check the DICOM tools with a synthetic order.',
+    ROW_MAPPING_FAILED: 'A hospital response could not be read as a worklist row. Ask support to inspect a synthetic response.',
+    SCREENING_FILTER_FAILED: 'The gateway could not check which orders are completed. Ask support to check the gateway database.'
+  };
+  const filterLabels = { scheduled_station_ae: 'Station AE title', requested_procedure_id: 'Procedure ID', modality: 'Modality' };
+  function explanation(check) {
+    if (!check) return '<p class="muted">No worklist check observed since this gateway started. Refresh Patients to Screen on the phone, then select Refresh results. Check the phone’s gateway address if no request appears.</p>';
+    const c = check.counts, advice = [];
+    if (check.error_code) advice.push(checkErrors[check.error_code] || 'Ask support to inspect this check.');
+    if (c.missing_accession || c.missing_both) advice.push(`${c.missing_accession + c.missing_both} ${c.missing_accession + c.missing_both === 1 ? 'candidate row has' : 'candidate rows have'} no order number. Ask AEH to put the imaging order ID into Accession Number (0008,0050) in Freedom MWL. The gateway cannot recover an order ID it did not receive.`);
+    if (c.missing_patient_id || c.missing_both) advice.push(`${c.missing_patient_id + c.missing_both} ${c.missing_patient_id + c.missing_both === 1 ? 'candidate row has' : 'candidate rows have'} no patient ID. Ask AEH to check Patient ID (0010,0020) in the same worklist response.`);
+    if (c.invalid_json) advice.push('Some response files could not be read as DICOM JSON. These losses are separate from orders rejected for missing identifiers.');
+    if (check.outcome === 'no_matches') advice.push('Check the saved filters and ask AEH whether a synthetic anterior order is published for this station. No date is assumed.');
+    if (c.hidden_completed_rows) advice.push('Orders already marked completed by this gateway are hidden. Inspect Screenings and Queue for delivery evidence.');
+    if (c.returned_rows) advice.push(check.source === 'worklist_request' ? 'The gateway prepared these rows for the requesting client. If the phone still looks empty, check its gateway address, refresh and search.' : 'This is a gateway-only result. Refresh the phone separately to check what it receives.');
+    return `<section class="worklist-result" aria-label="Worklist explanation"><h2>${esc(check.outcome === 'rows_available' && (c.rejected_rows || c.invalid_json) ? 'Usable orders found; some need attention' : checkOutcomes[check.outcome])}</h2>
+      <p>${esc(checkSources[check.source])} · ${esc(date(check.started_at))} · ${esc(check.duration_ms)} ms</p>
+      ${check.source === 'filter_preview' ? '<p class="amber">Preview check. Running it did not save the filters.</p>' : ''}
+      ${check.outcome === 'failed' ? `<p class="error">Stopped at ${esc(check.stage)}. Counts are partial; “Not reached” is not zero.</p>` : ''}
+      <ol class="worklist-stages">${[['Hospital files', c.extracted_files], ['Parsed datasets', c.parsed_datasets], ['Candidate steps', c.candidate_rows], ['Usable rows', c.accepted_rows], ['Hidden as completed', c.hidden_completed_rows], [check.source === 'worklist_request' ? 'Rows for client' : 'Rows available', c.returned_rows]].map(([label, value]) => `<li><strong>${esc(value ?? 'Not reached')}</strong><span>${esc(label)}</span></li>`).join('')}</ol>
+      ${advice.map(text => `<p>${esc(text)}</p>`).join('')}
+      <details><summary>Field checks and request evidence</summary>${kv([
+        ['Missing order number only (0008,0050)', c.missing_accession], ['Missing patient ID only (0010,0020)', c.missing_patient_id],
+        ['Both identifiers missing', c.missing_both], ['Rejected rows (each counted once)', c.rejected_rows],
+        ['Converted files', c.converted_files], ['Invalid JSON responses', c.invalid_json], ['Study UID derived because absent', c.derived_study_uid],
+        ['Active filter fields (values excluded)', Object.entries(check.filters).filter(([, active]) => active).map(([key]) => key).join(', ') || 'None'],
+        ['Recording was on at start', check.recording ? 'Yes' : 'No'], ['Check reference', check.id], ['HTTP request reference', check.request_id]
+      ])}</details><p class="muted">Phone display: not observed. Hospital order completion: not integrated. PACS acceptance and AEH application completion are separate.</p></section>`;
+  }
+  async function worklistDiagnostics() {
+    const [report, settings] = await Promise.all([api('/diagnostics/worklist'), api('/diagnostics/worklist/settings')]);
+    return `<div class="crumbs"><a href="#/diagnostics">Diagnostics</a> › Worklist</div><h1>Explain this worklist</h1>
+      <p>Refresh Patients to Screen on the phone, then refresh these results. A gateway-only check queries the hospital directly and reads recorded completion state.</p>
+      <div class="toolbar"><button data-action="check-refresh">Refresh results</button><button data-action="worklist-check">Run gateway-only check</button><button data-action="worklist-support">Download support summary</button></div>
+      <p class="muted">Build: ${esc(report.build)} · Node ${esc(report.node_version)} · Recording ${report.recording ? 'on' : 'off'} (<a href="#/diagnostics">change recording</a>). Last 20 checks in this process; this list clears on restart. Recorded counters remain in diagnostic archives.</p>
+      <div id="worklist-result" aria-live="polite">${explanation(report.checks[0])}</div>
+      <h2>Recent checks at last refresh</h2><div class="table-scroll"><table class="rows"><thead><tr><th>Time</th><th>Source</th><th>Result</th><th></th></tr></thead><tbody>${report.checks.map(check => `<tr><td>${esc(date(check.started_at))}</td><td>${esc(checkSources[check.source])}</td><td>${esc(checkOutcomes[check.outcome])}</td><td><button data-action="worklist-detail" data-id="${esc(check.id)}">View</button></td></tr>`).join('')}</tbody></table></div>
+      <h2>Worklist filters</h2><p>Use the values confirmed by AEH for anterior imaging. Blank means no filter for that field. Procedure ID is different from the examination description; OP may also include fundus orders.</p>
+      <p>Current source: ${settings.source === 'operator' ? 'saved in this dashboard (overrides the config file)' : 'config file'}. Saved changes apply to the next request and survive restart.</p>
+      <form id="worklist-filters" data-revision="${esc(settings.revision)}" class="worklist-filters"><fieldset ${settings.can_edit ? '' : 'disabled'}><legend>Filters used for the hospital query</legend>
+      ${Object.entries(filterLabels).map(([key, label]) => `<label>${esc(label)}<input name="${esc(key)}" value="${esc(settings.filters[key])}" maxlength="16" autocomplete="off"></label>`).join('')}</fieldset>
+      ${settings.can_edit ? '<div class="toolbar"><button type="button" data-action="worklist-preview">Preview these filters</button><button type="submit">Save filters</button><button type="button" data-action="worklist-reset">Restore config-file filters</button></div>' : '<p class="muted">An administrator account is needed to change filters.</p>'}
+      <p class="error" role="alert"></p></form>
+      <p>Previewing queries the hospital without saving. Saving affects which orders every connected phone sees. These controls cannot fill an empty hospital order number.</p>
+      <p><a href="#/health">Connection health</a> · <a href="#/screenings">Screenings</a> · <a href="#/queue">Image delivery queue</a></p>`;
+  }
+  const formFilters = form => Object.fromEntries(Object.keys(filterLabels).map(key => [key, form.elements[key].value.trim()]));
+  document.addEventListener('submit', async event => {
+    if (event.target.id !== 'worklist-filters') return;
+    event.preventDefault();
+    const form = event.target, version = routeVersion, fields = formFilters(form);
+    if (!confirm(`Apply these filters to all connected phones?\n${Object.entries(fields).map(([key, value]) => `${filterLabels[key]}: ${value || '(no filter)'}`).join('\n')}`)) return;
+    const button = form.querySelector('[type="submit"]'); button.disabled = true;
+    try {
+      await api('/diagnostics/worklist/settings', { method: 'PUT', body: JSON.stringify({ ...fields, revision: form.dataset.revision }) });
+      if (version !== routeVersion) return;
+      notice = 'Filters saved. Refresh the phone to use them.'; await render(false);
+    } catch (error) { if (version === routeVersion) form.querySelector('.error').textContent = error.message; }
+    finally { button.disabled = false; }
+  });
 
   // Clinically reviewed display text shared with the phone's AssessmentSummary.
   const labels = { normal: 'Normal appearance', active_infection: 'Active infection', scar: 'Corneal scar', clear: 'Clear lens', immature: 'Immature cataract', mature: 'Mature cataract', pciol: 'Intraocular lens', abstain: 'Unable to classify', positive: 'Pterygium detected', negative: 'Pterygium not detected' };
@@ -272,6 +340,29 @@
           if (version !== routeVersion) return;
           notice = `Released ${button.dataset.accession}. The order is back on Patients to Screen.`;
         } else return;
+      }
+      if (action === 'worklist-support') { await download('/diagnostics/worklist/support'); return; }
+      if (action === 'worklist-detail') {
+        const report = await api('/diagnostics/worklist');
+        if (version === routeVersion) document.getElementById('worklist-result').innerHTML = explanation(report.checks.find(check => check.id === button.dataset.id));
+        return;
+      }
+      if (action === 'worklist-check' || action === 'worklist-preview') {
+        const form = document.getElementById('worklist-filters');
+        const preview = action === 'worklist-preview';
+        if (preview && !form.reportValidity()) return;
+        const target = document.getElementById('worklist-result');
+        target.innerHTML = '<p role="status">Checking the hospital worklist…</p>';
+        const check = await api(`/diagnostics/worklist/${preview ? 'preview' : 'check'}`, { method: 'POST', ...(preview ? { body: JSON.stringify(formFilters(form)) } : {}) });
+        if (version === routeVersion) target.innerHTML = explanation(check);
+        return;
+      }
+      if (action === 'worklist-reset') {
+        if (!confirm('Restore the filters from the config file loaded at startup? This affects every connected phone.')) return;
+        const form = document.getElementById('worklist-filters');
+        await api('/diagnostics/worklist/settings/reset', { method: 'POST', body: JSON.stringify({ ...formFilters(form), revision: form.dataset.revision }) });
+        if (version !== routeVersion) return;
+        notice = 'Config-file filters restored. Refresh the phone.';
       }
       if (action === 'archive') { await download(`/diagnostics/segments/${pathId(button.dataset.id)}/archive`); return; }
       if (action === 'dicom') { await download(`/captures/${pathId(button.dataset.id)}/dicom`); return; }

@@ -159,3 +159,23 @@ test('release posts the chosen reason after confirmation, and does nothing witho
     expect(call?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'PHONE_LOST' }) });
     expect(ui.root.innerHTML).toContain('Released ACC-1.');
 });
+
+const worklistReport = {
+    build: 'unverified', node_version: 'v22.0.0', recording: false,
+    checks: [{ id: 'check-reference', request_id: 'request-reference', source: 'gateway_probe', outcome: 'no_usable_rows',
+        started_at: '2026-11-04T12:00:00Z', duration_ms: 10, recording: false, filters: { station: true },
+        counts: { extracted_files: 3, parsed_datasets: 3, converted_files: 3, candidate_rows: 3, accepted_rows: 0, rejected_rows: 3,
+            missing_accession: 2, missing_patient_id: 0, missing_both: 1, derived_study_uid: 0, invalid_json: 0, hidden_completed_rows: 0, returned_rows: 0 } }],
+};
+test.each([true, false])('worklist explanation separates gateway evidence and restricts filter controls (admin=%s)', async admin => {
+    const ui = page(async url => json(url.endsWith('/settings') ? { filters: { scheduled_station_ae: '<SYNTHETIC>', requested_procedure_id: '', modality: '' }, source: 'operator', revision: 'revision', can_edit: admin } : worklistReport), '#/diagnostics/worklist');
+    await settle();
+    expect(ui.root.innerHTML).toContain('3 candidate rows have no order number');
+    expect(ui.root.innerHTML).toContain('1 candidate row has no patient ID');
+    expect(ui.root.innerHTML).toContain('Phone display: not observed');
+    expect(ui.root.innerHTML).toContain('Hospital order completion: not integrated');
+    expect(ui.root.innerHTML).toContain('&lt;SYNTHETIC&gt;');
+    expect(ui.root.innerHTML).not.toContain('<SYNTHETIC>');
+    expect(ui.root.innerHTML.includes('data-action="worklist-preview"')).toBe(admin);
+    expect(ui.fetch.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+});

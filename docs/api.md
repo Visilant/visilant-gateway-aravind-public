@@ -183,6 +183,46 @@ Responses that expose patient content use `Cache-Control: no-store`.
 Failed captures also degrade `/health` and need operator attention. The app upload queue
 and the gateway delivery queue are separate; see [architecture.md](architecture.md).
 
+## Worklist diagnostics and filter settings
+
+All routes below require a bearer token and return `Cache-Control: no-store`. ADMIN-only
+routes return 403 for an authenticated operator. `/worklist` keeps its existing response
+shape. Each HTTP response includes `x-diagnostic-request-id`: the validated incoming UUID
+when supplied, otherwise a generated UUID. Explanation check IDs are always generated
+independently, so overlapping requests remain distinct.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/diagnostics/worklist` | Schema version 1, safe runtime/build metadata and newest-finished-first history (up to 20 checks in this process). |
+| `POST` | `/diagnostics/worklist/check` | Run a gateway-only check using saved filters; no body. |
+| `GET` | `/diagnostics/worklist/settings` | Effective filters, startup file defaults, source, revision and `can_edit`. |
+| `POST` | `/diagnostics/worklist/preview` | ADMIN; query with proposed filters without saving. |
+| `PUT` | `/diagnostics/worklist/settings` | ADMIN; save all three filters and apply them to future queries. |
+| `POST` | `/diagnostics/worklist/settings/reset` | ADMIN; restore startup file filters and remove the persistent override. |
+| `GET` | `/diagnostics/worklist/support` | Download the report as `gateway-worklist-support.json` (unenveloped JSON). |
+
+Preview accepts exactly `requested_procedure_id`, `modality`, and `scheduled_station_ae`,
+all strings of at most 16 printable ASCII characters. Blank strings mean no filter.
+Save/reset also require the 64-character `revision` returned by settings. Save persists
+only after validation; 409 means another session changed the settings. Reset ignores the
+submitted filter values and restores the startup defaults. The three fields are still
+required for a consistent request shape. A concurrent manual check/preview also returns
+409; ordinary worklist requests remain independent.
+
+A check contains `id`, `request_id`, `started_at`, `duration_ms`, `source`, `stage`,
+`outcome`, `error_code`, `counts`, boolean `filters`, `recording`, `phone_display` and
+`hospital_completion`. Sources distinguish a normal `worklist_request`, `gateway_probe`
+and `filter_preview`. Query failures are returned as a failed diagnostic result, not
+as an empty successful query; the regular `/worklist` endpoint still fails on these errors.
+Counts after a failed stage are partial, with `null` for unavailable file/filtered totals.
+
+On a successful mapping, `candidate_rows = accepted_rows + rejected_rows` and
+`accepted_rows = hidden_completed_rows + returned_rows`. Rejections split into
+`missing_accession`, `missing_patient_id`, and `missing_both`, counted once per row.
+`invalid_json` counts conversion output that could not be parsed as a dataset;
+a failing conversion subprocess aborts the query. No field values enter a summary.
+For probes, `returned_rows` means rows that would be available, not rows sent to a phone.
+
 ## DICOM output
 
 Captures use Ophthalmic Photography 8 Bit (`1.2.840.10008.5.1.4.1.1.77.1.5.1`), modality
