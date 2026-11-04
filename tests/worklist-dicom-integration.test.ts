@@ -64,6 +64,13 @@ integration('worklist diagnostics over real C-FIND', () => {
         if (root) await fs.rm(root, { recursive: true, force: true });
     });
     test('explains the blank accession and preserves a leading-zero order ID', async () => {
+        const inspected = await service.inspect();
+        expect(inspected.records).toHaveLength(2);
+        expect(inspected.omitted_records).toBe(0);
+        const incoming = inspected.records.map(record => JSON.parse(record.dicom_json));
+        expect(incoming.map(dataset => dataset['00100020'].Value[0]).sort()).toEqual(['TEST-0', 'TEST-1']);
+        expect(incoming.some(dataset => dataset['00080050'].Value?.[0] === '00098')).toBe(true);
+        expect(inspected.records.flatMap(record => record.candidates).map(candidate => candidate.outcome).sort()).toEqual(['accepted', 'missing_accession']);
         const entries = await service.getWorklist();
         expect(entries.map(entry => entry.accession_number)).toEqual(['00098']);
         expect(service.recent()[0].counts).toMatchObject({ extracted_files: 2, converted_files: 2, parsed_datasets: 2,

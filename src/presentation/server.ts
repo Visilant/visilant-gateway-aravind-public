@@ -5,7 +5,7 @@ import express from 'express';
 import { existsSync } from 'fs';
 import path from 'path';
 import type { Server } from 'http';
-import { useContainer, useExpressServer } from 'routing-controllers';
+import { UnauthorizedError, useContainer, useExpressServer } from 'routing-controllers';
 import Container, { Inject, Service } from 'typedi';
 import type { GatewayConfig } from '../config';
 import type { Logger } from '../infrastructure/logger';
@@ -87,7 +87,10 @@ export class GatewayServer {
             authorizationChecker: async (action, roles) => {
                 const user = await this.authenticate(action.request.headers.authorization);
                 action.request.user = user ?? undefined;
-                return user !== null && (!roles.length || roles.includes(user.role));
+                // An expired token must still trigger the UI's refresh/sign-in flow,
+                // including on role-restricted routes. Valid non-admins receive 403.
+                if (!user) throw new UnauthorizedError();
+                return !roles.length || roles.includes(user.role);
             },
             // Supplies @CurrentUser() — which is how a capture records who took it.
             currentUserChecker: async (action) => {

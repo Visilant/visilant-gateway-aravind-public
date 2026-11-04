@@ -131,3 +131,7 @@
   summary { cursor: pointer; }
   button:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
   @media (max-width: 800px) { .worklist-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Incoming hospital values are inert text; long identifiers and JSON stay readable. */
+.incoming-record { border-top: 1px solid #ccd5dc; margin-top: 1.5rem; padding-top: .5rem; }
+.incoming-record .kv td:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+.incoming-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; padding: 1rem; background: #f3f5f7; color: #172c3b; }

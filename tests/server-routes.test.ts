@@ -11,7 +11,7 @@ import { GatewayConfig } from '../src/config';
 import { CONFIG, DATABASE, LOGGER, RECORDER } from '../src/tokens';
 import { GatewayServer } from '../src/presentation/server';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
-import { DiagnosticRecorder } from '../src/infrastructure/diagnostics';
+import { DiagnosticRecorder, diagnostics } from '../src/infrastructure/diagnostics';
 import { WorklistClient } from '../src/infrastructure/dicom';
 
 let server: Server, database: DataSource, base: string, directory: string, recorder: DiagnosticRecorder;
@@ -24,7 +24,7 @@ beforeAll(async () => {
         header === 'Bearer admin' ? { id: 'admin', role: 'ADMIN' } : null } as never);
     Container.set(WorklistClient, { query: async () => [{ '00100020': { vr: 'LO', Value: ['CANARY-PATIENT-ID'] },
         '00100010': { vr: 'PN', Value: [{ Alphabetic: 'CANARY^NAME' }] } }] } as never);
-    Container.set(DATABASE, database); recorder = new DiagnosticRecorder(); Container.set(RECORDER, recorder);
+    Container.set(DATABASE, database); recorder = diagnostics; Container.set(RECORDER, recorder);
     Container.set(LOGGER, { info: jest.fn(), warn: jest.fn(), error: jest.fn() } as never);
     server = await Container.get(GatewayServer).start(); base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -115,4 +115,26 @@ test('only admins can preview and change filters; malformed and stale saves cann
     expect(saved.status).toBe(200);
     expect((await snapshot()).filters).toEqual(filters);
     expect((await fetch(base + '/diagnostics/worklist/settings', { method: 'PUT', headers: admin, body: JSON.stringify({ ...filters, revision: before.revision }) })).status).toBe(409);
+});
+
+test('incoming records require admin auth, are not cached, and never enter support reports or archives', async () => {
+    await recorder.start(path.join(directory, 'diagnostics'));
+    const route = base + '/diagnostics/worklist/inspect';
+    expect((await fetch(route, { method: 'POST' })).status).toBe(401);
+    expect((await fetch(route, { method: 'POST', headers: { Authorization: 'Bearer test' } })).status).toBe(403);
+    const response = await fetch(route, { method: 'POST', headers: { Authorization: 'Bearer admin' } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = await response.json() as { data: { records: { dicom_json: string; candidates: unknown[] }[] } };
+    expect(body.data.records[0].dicom_json).toContain('CANARY-PATIENT-ID');
+    expect(body.data.records[0].candidates[0]).toMatchObject({ outcome: 'missing_accession' });
+    for (const suffix of ['', '/support']) {
+        const summary = await fetch(base + '/diagnostics/worklist' + suffix, { headers: { Authorization: 'Bearer admin' } });
+        expect(await summary.text()).not.toMatch(/CANARY|dicom_json|effective_study_uid/);
+    }
+    await recorder.flush();
+    const files = await fs.readdir(path.join(directory, 'diagnostics', recorder.segmentId!));
+    const contents = (await Promise.all(files.map(file => fs.readFile(path.join(directory, 'diagnostics', recorder.segmentId!, file), 'utf8')))).join('\n');
+    expect(contents).toContain('worklist.explanation');
+    expect(contents).not.toMatch(/CANARY|dicom_json|effective_study_uid/);
 });

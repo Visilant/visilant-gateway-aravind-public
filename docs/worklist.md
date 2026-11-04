@@ -151,6 +151,31 @@ The row returned to the phone is defined in `src/application/dto/worklist.dto.ts
    saving it. **Save filters** applies them to all connected phones on their next refresh.
    Use values confirmed for anterior imaging: `OP` can also match fundus orders and a
    procedure description is not a procedure ID.
+7. For a local support call, an administrator can select **Inspect incoming records**.
+   This runs a fresh gateway-only query using the saved filters. The screen shows the
+   endpoint and filters used, actual accession and patient identifiers, incoming Study
+   UID, procedure fields, scheduled steps and expandable received DICOM JSON. Rejected
+   records remain visible. The gateway's effective Study UID is labelled separately as
+   received or derived; it does not replace the incoming value in the inspector.
+
+This inspector shows the parsed response before gateway mapping, including fields the
+mapper does not use. JSON notation preserves leading zeros and padding; `[""]` is an
+empty string, “Empty value” means the element has no values, and “Not sent” means the
+tag is absent. Mapping outcomes explain required identifiers, while completed-order
+filtering remains an aggregate count above. A later conversion failure leaves earlier
+parsed records available and marks mapping unavailable. Invalid JSON cannot be inspected.
+
+Patient values are only in the explicit inspection response and temporary browser view.
+They are not saved in the database, recent checks, logs or diagnostic/support archives.
+Use **Clear records** when finished; the view also clears after five minutes, on refresh,
+navigation and sign-out. Earlier phone requests cannot be reopened as raw records.
+The probe does not establish what a phone received or displayed and does not modify
+screenings, images or configuration.
+
+The view includes at most 100 records, each at most 64 KiB, with a combined 512 KiB
+raw JSON/candidate detail budget and at most 1,000 candidate details. Omitted records
+and details are counted visibly; included identifiers are never shortened to fit.
+If needed, narrow the saved filters using values confirmed by AEH, then inspect again.
 
 The last 20 finished checks are retained in memory and cleared at restart. Each has a
 unique check ID and HTTP request reference; concurrent requests keep separate counters.

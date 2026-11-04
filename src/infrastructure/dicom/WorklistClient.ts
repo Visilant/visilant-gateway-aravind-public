@@ -61,7 +61,8 @@ export class WorklistClient extends DicomClient {
     }
 
     @profile('worklist.query')
-    async query(node: MwlNodeConfig, query: WorklistQuery = {}, observe?: (counts: WorklistConversionCounts) => void): Promise<DicomJsonDataset[]> {
+    async query(node: MwlNodeConfig, query: WorklistQuery = {}, observe?: (counts: WorklistConversionCounts) => void,
+        inspect?: (dataset: DicomJsonDataset, index: number) => void): Promise<DicomJsonDataset[]> {
         // Every response file holds patient demographics, so the whole directory is
         // temporary and removed in the finally below, success or not.
         const work = await fs.mkdtemp(path.join(os.tmpdir(), 'visilant-mwl-'));
@@ -101,7 +102,9 @@ export class WorklistClient extends DicomClient {
                     // One malformed response should not lose the rest of the worklist.
                     // No detail is logged: the payload is PHI.
                     this.logger.error('worklist: discarded a response that was not valid DICOM JSON');
+                    continue;
                 }
+                inspect?.(datasets[datasets.length - 1], datasets.length);
             }
 
             return datasets;

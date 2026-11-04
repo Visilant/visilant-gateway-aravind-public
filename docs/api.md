@@ -195,6 +195,7 @@ independently, so overlapping requests remain distinct.
 | --- | --- | --- |
 | `GET` | `/diagnostics/worklist` | Schema version 1, safe runtime/build metadata and newest-finished-first history (up to 20 checks in this process). |
 | `POST` | `/diagnostics/worklist/check` | Run a gateway-only check using saved filters; no body. |
+| `POST` | `/diagnostics/worklist/inspect` | ADMIN; fresh gateway-only query using saved filters; no body. Returns actual incoming records for temporary local inspection. |
 | `GET` | `/diagnostics/worklist/settings` | Effective filters, startup file defaults, source, revision and `can_edit`. |
 | `POST` | `/diagnostics/worklist/preview` | ADMIN; query with proposed filters without saving. |
 | `PUT` | `/diagnostics/worklist/settings` | ADMIN; save all three filters and apply them to future queries. |
@@ -206,7 +207,7 @@ all strings of at most 16 printable ASCII characters. Blank strings mean no filt
 Save/reset also require the 64-character `revision` returned by settings. Save persists
 only after validation; 409 means another session changed the settings. Reset ignores the
 submitted filter values and restores the startup defaults. The three fields are still
-required for a consistent request shape. A concurrent manual check/preview also returns
+required for a consistent request shape. A concurrent manual check/preview/inspection also returns
 409; ordinary worklist requests remain independent.
 
 A check contains `id`, `request_id`, `started_at`, `duration_ms`, `source`, `stage`,
@@ -222,6 +223,30 @@ On a successful mapping, `candidate_rows = accepted_rows + rejected_rows` and
 `invalid_json` counts conversion output that could not be parsed as a dataset;
 a failing conversion subprocess aborts the query. No field values enter a summary.
 For probes, `returned_rows` means rows that would be available, not rows sent to a phone.
+
+Inspection returns `{ check, query, records, parsed_datasets_observed, omitted_records,
+omitted_candidate_details, limits }`. `check` is the same sanitized explanation stored
+in history. `query` identifies the actual MWL host, port, AE titles and saved filter
+values used for this query; no date, patient or accession matching filter is added.
+Each record has a one-based `dataset_index`, `dicom_json` (the received dataset after
+DCMTK conversion, before gateway normalization) and candidate mapping outcomes.
+Candidates identify the one-based scheduled sequence item (`null` for the fallback),
+the rejection reason or accepted mapping, and the effective Study UID with its source
+(`received`, `derived`, or `not_mapped`). An accepted mapping is not a phone display
+or per-row completion observation; the check contains aggregate completion filtering.
+
+The inspection response contains patient data and is ADMIN-only with `no-store`.
+It is request-local: records and query values are not retained in the database, recent
+history, logs, recorder or support exports. The UI clears them after five minutes,
+on explicit clear, refresh, navigation or sign-out. There is no historical raw-record
+endpoint. This fresh probe is not the dataset from an earlier phone request.
+
+Inspection is bounded to 100 records, 64 KiB per record, 512 KiB of combined raw JSON
+and candidate details, and 1,000 candidate details. Whole records/details are omitted
+at a limit and counted explicitly; identifiers in included records are not truncated.
+Successful conversions preceding a converter failure remain inspectable, with mapping
+unavailable and a failed check. Malformed JSON and binary DICOM responses are not
+included; existing conversion failure behavior and temporary-file cleanup are preserved.
 
 ## DICOM output
 

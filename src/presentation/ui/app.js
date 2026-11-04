@@ -9,7 +9,7 @@
     clear() { sessionVersion++; ['token', 'refresh_token', 'email', 'signed_in_at'].forEach(key => sessionStorage.removeItem(key)); }
   };
   const views = {};
-  let healthCache, refreshing, routeVersion = 0, timer, notice = '', study;
+  let healthCache, refreshing, routeVersion = 0, timer, notice = '', study, inspectionTimer, inspectionVersion = 0;
   const urls = new Set();
   // DICOM PN "FAMILY^GIVEN^MIDDLE^PREFIX^SUFFIX" -> "Given Middle Family", as the phone app shows it.
   const personName = value => {
@@ -63,7 +63,12 @@
     a.href = url; a.download = result.filename; a.click();
     setTimeout(() => { URL.revokeObjectURL(url); urls.delete(url); }, 1000);
   }
-  function cleanup() { clearInterval(timer); timer = undefined; urls.forEach(url => URL.revokeObjectURL(url)); urls.clear(); study = undefined; }
+  function clearInspection(message = '') {
+    inspectionVersion++; clearTimeout(inspectionTimer); inspectionTimer = undefined;
+    const target = document.getElementById('incoming-worklist-records');
+    if (target) target.innerHTML = message ? `<p class="muted">${esc(message)}</p>` : '';
+  }
+  function cleanup() { clearInspection(); clearInterval(timer); timer = undefined; urls.forEach(url => URL.revokeObjectURL(url)); urls.clear(); study = undefined; }
   function route() {
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
     const name = parts.shift() || 'queue';
@@ -188,6 +193,31 @@
     SCREENING_FILTER_FAILED: 'The gateway could not check which orders are completed. Ask support to check the gateway database.'
   };
   const filterLabels = { scheduled_station_ae: 'Station AE title', requested_procedure_id: 'Procedure ID', modality: 'Modality' };
+  // JSON values retain leading zeros, padding and all PN components. Never insert
+  // hospital-provided markup or turn BulkDataURI values into fetched resources.
+  const incomingFields = (dataset, fields) => kv(fields.map(([tag, label]) => {
+    const element = dataset && Object.hasOwn(dataset, tag) ? dataset[tag] : undefined;
+    const value = element === undefined ? 'Not sent' : !element?.Value || (Array.isArray(element.Value) && !element.Value.length)
+      ? 'Empty value' : JSON.stringify(element.Value);
+    return [`${label} (${tag.slice(0, 4)},${tag.slice(4)})${element?.vr ? ` · ${element.vr}` : ''}`, value];
+  }));
+  function incomingRecords(result) {
+    const query = result.query, check = result.check;
+    const outcomes = { accepted: 'Passed required identifier checks', missing_accession: 'Rejected: missing accession', missing_patient_id: 'Rejected: missing Patient ID', missing_both: 'Rejected: both identifiers missing' };
+    return `<h3>Incoming records from this gateway-only query</h3><p>${esc(date(check.started_at))} · Check ${esc(check.id)}. These are the received datasets converted to DICOM JSON, before gateway mapping. This is a fresh query using saved filters; it is not a recording of a phone request.</p>
+      ${kv([['MWL host / port', `${query.host}:${query.port}`], ['Called AE', query.called_ae], ['Calling AE', query.calling_ae],
+        ...Object.entries(filterLabels).map(([key, label]) => [label, query[key] || '(no filter)']), ['Date / patient / accession matching filters', 'None']])}
+      <p>Values are shown as JSON: <code>[""]</code> is an empty string; “Not sent” means the tag was absent. Accepted mapping does not establish phone display or hospital completion. Completion-filter totals are in the explanation above.</p>
+      ${result.omitted_records || result.omitted_candidate_details ? `<p class="amber">Inspection limit reached: ${esc(result.omitted_records)} whole records and ${esc(result.omitted_candidate_details)} candidate details omitted. Identifiers in displayed records have not been shortened. Use AEH-confirmed filters to narrow the query.</p>` : ''}
+      ${result.records.length ? result.records.map(record => {
+        const dataset = JSON.parse(record.dicom_json), steps = dataset['00400100']?.Value;
+        return `<article class="incoming-record"><h3>Received dataset ${esc(record.dataset_index)}</h3>
+          ${incomingFields(dataset, [['00080050', 'Accession Number'], ['00100020', 'Patient ID'], ['00100010', 'Patient name'], ['0020000D', 'Incoming Study Instance UID'], ['00401001', 'Requested Procedure ID'], ['00321060', 'Requested Procedure Description'], ['00081030', 'Study Description']])}
+          ${Array.isArray(steps) ? steps.map((step, index) => `<h4>Scheduled step ${index + 1}</h4>${incomingFields(step, [['00400009', 'Step ID'], ['00400001', 'Station AE Title'], ['00400010', 'Station Name'], ['00080060', 'Modality'], ['00400007', 'Step Description'], ['00400002', 'Start date'], ['00400003', 'Start time']])}`).join('') : '<p>No scheduled step values received.</p>'}
+          ${record.candidates.length ? record.candidates.map(candidate => `<p><strong>${esc(candidate.step_index == null ? 'Fallback candidate' : `Step ${candidate.step_index}`)}: ${esc(outcomes[candidate.outcome])}</strong>${candidate.effective_study_uid ? `<br>Gateway Study UID (${esc(candidate.study_uid_source)}): <code>${esc(candidate.effective_study_uid)}</code>` : ''}</p>`).join('') : '<p>Candidate mapping details unavailable; inspect the failed stage or limits above.</p>'}
+          <details><summary>All received DICOM JSON fields</summary><pre class="incoming-json">${esc(JSON.stringify(dataset, null, 2))}</pre></details></article>`;
+      }).join('') : '<p>No parsed records available to inspect. Check the query and conversion evidence above.</p>'}`;
+  }
   function explanation(check) {
     if (!check) return '<p class="muted">No worklist check observed since this gateway started. Refresh Patients to Screen on the phone, then select Refresh results. Check the phone’s gateway address if no request appears.</p>';
     const c = check.counts, advice = [];
@@ -213,12 +243,17 @@
       ])}</details><p class="muted">Phone display: not observed. Hospital order completion: not integrated. PACS acceptance and AEH application completion are separate.</p></section>`;
   }
   async function worklistDiagnostics() {
+    clearInspection();
     const [report, settings] = await Promise.all([api('/diagnostics/worklist'), api('/diagnostics/worklist/settings')]);
     return `<div class="crumbs"><a href="#/diagnostics">Diagnostics</a> › Worklist</div><h1>Explain this worklist</h1>
       <p>Refresh Patients to Screen on the phone, then refresh these results. A gateway-only check queries the hospital directly and reads recorded completion state.</p>
       <div class="toolbar"><button data-action="check-refresh">Refresh results</button><button data-action="worklist-check">Run gateway-only check</button><button data-action="worklist-support">Download support summary</button></div>
       <p class="muted">Build: ${esc(report.build)} · Node ${esc(report.node_version)} · Recording ${report.recording ? 'on' : 'off'} (<a href="#/diagnostics">change recording</a>). Last 20 checks in this process; this list clears on restart. Recorded counters remain in diagnostic archives.</p>
       <div id="worklist-result" aria-live="polite">${explanation(report.checks[0])}</div>
+      <section aria-label="Incoming MWL records"><h2>Inspect incoming MWL records</h2>
+        <p>Show actual identifiers and rejected records from a fresh query using the saved filters. Patient data stays in this temporary view and is excluded from support summaries and diagnostic archives. The view clears after five minutes, on refresh, or when you leave this page.</p>
+        ${settings.can_edit ? '<div class="toolbar"><button data-action="worklist-inspect">Inspect incoming records</button><button data-action="worklist-inspection-clear">Clear records</button></div>' : '<p class="muted">An administrator account is needed to inspect patient records.</p>'}
+        <div id="incoming-worklist-records" aria-live="polite"></div></section>
       <h2>Recent checks at last refresh</h2><div class="table-scroll"><table class="rows"><thead><tr><th>Time</th><th>Source</th><th>Result</th><th></th></tr></thead><tbody>${report.checks.map(check => `<tr><td>${esc(date(check.started_at))}</td><td>${esc(checkSources[check.source])}</td><td>${esc(checkOutcomes[check.outcome])}</td><td><button data-action="worklist-detail" data-id="${esc(check.id)}">View</button></td></tr>`).join('')}</tbody></table></div>
       <h2>Worklist filters</h2><p>Use the values confirmed by AEH for anterior imaging. Blank means no filter for that field. Procedure ID is different from the examination description; OP may also include fundus orders.</p>
       <p>Current source: ${settings.source === 'operator' ? 'saved in this dashboard (overrides the config file)' : 'config file'}. Saved changes apply to the next request and survive restart.</p>
@@ -328,6 +363,7 @@
   document.addEventListener('click', async event => {
     const button = event.target.closest('[data-action]'); if (!button) return;
     event.preventDefault(); const action = button.dataset.action, version = routeVersion; button.disabled = true;
+    let inspectionOperation;
     try {
       if (action === 'signout') { session.clear(); routeVersion++; signin(); return; }
       if (action === 'sync') { const result = await api('/captures/sync', { method: 'POST' }); if (version !== routeVersion) return; notice = `${result.sent} sent, ${result.failed} failed`; }
@@ -342,19 +378,35 @@
         } else return;
       }
       if (action === 'worklist-support') { await download('/diagnostics/worklist/support'); return; }
+      if (action === 'worklist-inspection-clear') { clearInspection(); return; }
+      if (action === 'worklist-inspect') {
+        clearInspection('Querying the hospital for incoming records…');
+        const inspection = inspectionVersion, auth = sessionVersion;
+        inspectionOperation = inspection;
+        const result = await api('/diagnostics/worklist/inspect', { method: 'POST' });
+        if (version !== routeVersion || auth !== sessionVersion || inspection !== inspectionVersion || !session.get('token')) return;
+        document.getElementById('worklist-result').innerHTML = explanation(result.check);
+        document.getElementById('incoming-worklist-records').innerHTML = incomingRecords(result);
+        inspectionTimer = setTimeout(() => clearInspection('Records cleared after five minutes. Run another inspection to view current records.'), 5 * 60 * 1000);
+        return;
+      }
       if (action === 'worklist-detail') {
+        clearInspection();
+        const operation = inspectionVersion;
         const report = await api('/diagnostics/worklist');
-        if (version === routeVersion) document.getElementById('worklist-result').innerHTML = explanation(report.checks.find(check => check.id === button.dataset.id));
+        if (version === routeVersion && operation === inspectionVersion) document.getElementById('worklist-result').innerHTML = explanation(report.checks.find(check => check.id === button.dataset.id));
         return;
       }
       if (action === 'worklist-check' || action === 'worklist-preview') {
+        clearInspection();
+        const operation = inspectionVersion;
         const form = document.getElementById('worklist-filters');
         const preview = action === 'worklist-preview';
         if (preview && !form.reportValidity()) return;
         const target = document.getElementById('worklist-result');
         target.innerHTML = '<p role="status">Checking the hospital worklist…</p>';
         const check = await api(`/diagnostics/worklist/${preview ? 'preview' : 'check'}`, { method: 'POST', ...(preview ? { body: JSON.stringify(formFilters(form)) } : {}) });
-        if (version === routeVersion) target.innerHTML = explanation(check);
+        if (version === routeVersion && operation === inspectionVersion) target.innerHTML = explanation(check);
         return;
       }
       if (action === 'worklist-reset') {
@@ -371,13 +423,16 @@
         catch (err) { if (err.status !== 409) throw err; }
       }
       if (action === 'eye' && study) { study.eye = button.dataset.eye; }
-      if (version === routeVersion) await render(false);
+      if (version === routeVersion) { clearInspection(); await render(false); }
     } catch (err) {
       if (version !== routeVersion) return;
+      if (action === 'worklist-inspect' && inspectionOperation !== inspectionVersion) return;
+      if (action === 'worklist-inspect') clearInspection('Inspection did not finish. Retry after checking the error.');
       if (err.status === 401) signin(); else { const p = document.createElement('p'); p.className = 'error'; p.setAttribute('role', 'alert'); p.textContent = err.message; root.prepend(p); }
     } finally { button.disabled = false; }
   });
   window.addEventListener('hashchange', () => { void render(); });
+  window.addEventListener('pagehide', () => clearInspection());
   fetch('/health', { cache: 'no-store' }).then(r => r.json()).then(value => { healthCache = value; account(); }).catch(() => {});
   void render();
 })();

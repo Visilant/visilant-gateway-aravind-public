@@ -26,6 +26,12 @@ export class WorklistDiagnosticsController {
     async check() {
         try { return await this.worklist.probe(); } catch (error) { throw mapError(error); }
     }
+    @Post('/inspect')
+    @Header('Cache-Control', 'no-store')
+    @Authorized(UserRole.ADMIN)
+    async inspect() {
+        try { return await this.worklist.inspect(); } catch (error) { throw mapError(error); }
+    }
     @Post('/preview')
     @Header('Cache-Control', 'no-store')
     @Authorized(UserRole.ADMIN)

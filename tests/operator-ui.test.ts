@@ -9,6 +9,9 @@ const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 function page(fetchRoute: (url: string) => Promise<Response>, hash = '#/queue') {
     const root = { innerHTML: '', prepend: jest.fn() };
     const account = { innerHTML: '' };
+    const incoming = { innerHTML: '' }, explanation = { innerHTML: '' };
+    const timeouts = new Map<number, { callback: () => void; delay: number }>();
+    let nextTimeout = 0;
     const storage = new Map([['token', 'old-token'], ['refresh_token', 'old-refresh']]);
     const documentEvents: Record<string, (event: unknown) => Promise<void>> = {};
     const windowEvents: Record<string, () => void> = {};
@@ -17,7 +20,7 @@ function page(fetchRoute: (url: string) => Promise<Response>, hash = '#/queue') 
     const confirm = jest.fn(() => true);
     vm.runInNewContext(source, {
         document: {
-            getElementById: (id: string) => id === 'root' ? root : account,
+            getElementById: (id: string) => id === 'root' ? root : id === 'incoming-worklist-records' ? incoming : id === 'worklist-result' ? explanation : account,
             querySelectorAll: () => [],
             body: { classList: { toggle() {} } },
             addEventListener: (name: string, callback: (event: unknown) => Promise<void>) => { documentEvents[name] = callback; },
@@ -32,8 +35,10 @@ function page(fetchRoute: (url: string) => Promise<Response>, hash = '#/queue') 
         fetch, Headers, FormData,
         URL: { createObjectURL: () => 'blob:preview', revokeObjectURL() {} },
         setInterval: () => 1, clearInterval() {}, confirm,
+        setTimeout: (callback: () => void, delay: number) => { const id = ++nextTimeout; timeouts.set(id, { callback, delay }); return id; },
+        clearTimeout: (id: number) => timeouts.delete(id),
     });
-    return { root, storage, documentEvents, windowEvents, location, fetch, confirm };
+    return { root, storage, documentEvents, windowEvents, location, fetch, confirm, incoming, explanation, timeouts };
 }
 
 test('a refresh finishing after sign-out cannot restore the session', async () => {
@@ -177,5 +182,81 @@ test.each([true, false])('worklist explanation separates gateway evidence and re
     expect(ui.root.innerHTML).toContain('&lt;SYNTHETIC&gt;');
     expect(ui.root.innerHTML).not.toContain('<SYNTHETIC>');
     expect(ui.root.innerHTML.includes('data-action="worklist-preview"')).toBe(admin);
+    expect(ui.root.innerHTML.includes('data-action="worklist-inspect"')).toBe(admin);
     expect(ui.fetch.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+});
+
+const inspectedRecords = {
+    check: worklistReport.checks[0],
+    query: { host: 'synthetic', port: 104, called_ae: 'TEST_MWL', calling_ae: 'VISILANT', scheduled_station_ae: '', modality: '', requested_procedure_id: '' },
+    omitted_records: 0, omitted_candidate_details: 0,
+    records: [{ dataset_index: 1, dicom_json: JSON.stringify({
+        '00080050': { vr: 'SH', Value: ['00098'] },
+        '00100020': { vr: 'LO', Value: ['<img src=x onerror=alert(1)>'] },
+        '00100010': { vr: 'PN', Value: [{ Alphabetic: 'CANARY^PATIENT' }] },
+        '00400100': { vr: 'SQ', Value: [{ '00400009': { vr: 'SH', Value: ['STEP-1'] } }] },
+    }), candidates: [{ step_index: 1, outcome: 'accepted', effective_study_uid: '1.2.3', study_uid_source: 'derived' }] }],
+};
+const inspectorPage = (inspect: () => Promise<Response> = async () => json(inspectedRecords)) => page(async url => {
+    if (url.endsWith('/inspect')) return inspect();
+    if (url.endsWith('/settings')) return json({ can_edit: true, filters: {}, source: 'config_file' });
+    if (url === '/system/config') return json({ config: {}, uptime_seconds: 1 });
+    return json(worklistReport);
+}, '#/diagnostics/worklist');
+const click = (ui: ReturnType<typeof page>, action: string) => ui.documentEvents.click({ target: { closest: () => ({ dataset: { action }, disabled: false }) }, preventDefault() {} });
+
+test('incoming records are explicitly requested, preserve identifiers, escape markup and clear after five minutes', async () => {
+    const ui = inspectorPage(); await settle();
+    expect(ui.fetch.mock.calls.some(([url]) => url.endsWith('/inspect'))).toBe(false);
+    await click(ui, 'worklist-inspect');
+    expect(ui.incoming.innerHTML).toContain('fresh query using saved filters');
+    expect(ui.incoming.innerHTML).toContain('[&quot;00098&quot;]');
+    expect(ui.incoming.innerHTML).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(ui.incoming.innerHTML).not.toContain('<img');
+    expect(ui.incoming.innerHTML).toContain('Not sent');
+    expect(ui.incoming.innerHTML).toContain('Gateway Study UID (derived)');
+    expect(ui.incoming.innerHTML).toContain('CANARY^PATIENT');
+    expect(JSON.stringify([...ui.storage])).not.toContain('CANARY');
+    expect(ui.fetch.mock.calls.find(([url]) => url.endsWith('/inspect'))?.[1]).toMatchObject({ method: 'POST', cache: 'no-store' });
+    [...ui.timeouts.values()].find(task => task.delay === 300000)!.callback();
+    expect(ui.incoming.innerHTML).not.toContain('CANARY');
+    expect(ui.incoming.innerHTML).toContain('Records cleared');
+});
+
+test.each(['worklist-inspection-clear', 'check-refresh', 'signout', 'navigate', 'pagehide'])('a late inspector response cannot repopulate records after %s', async action => {
+    let finish!: (response: Response) => void;
+    const ui = inspectorPage(() => new Promise(resolve => { finish = resolve; })); await settle();
+    const pending = click(ui, 'worklist-inspect'); await settle();
+    if (action === 'navigate') { ui.location.hash = '#/config'; ui.windowEvents.hashchange(); }
+    else if (action === 'pagehide') ui.windowEvents.pagehide();
+    else await click(ui, action);
+    finish(json(inspectedRecords)); await pending; await settle();
+    expect(ui.incoming.innerHTML).not.toContain('CANARY');
+    expect(ui.timeouts.size).toBe(0);
+});
+
+test('an old inspection failure cannot clear a newer inspection', async () => {
+    let finish!: (response: Response) => void;
+    let count = 0;
+    const ui = inspectorPage(() => ++count === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(json(inspectedRecords)));
+    await settle();
+    const old = click(ui, 'worklist-inspect'); await settle();
+    await click(ui, 'worklist-inspection-clear');
+    await click(ui, 'worklist-inspect');
+    finish(json({}, 409)); await old;
+    expect(ui.incoming.innerHTML).toContain('CANARY^PATIENT');
+});
+
+test('a rejected incoming row and inspection omissions remain explicit', async () => {
+    const ui = inspectorPage(async () => json({ ...inspectedRecords, omitted_records: 2, records: [{ dataset_index: 1,
+        dicom_json: '{"00080050":{"vr":"SH","Value":[""]}}',
+        candidates: [{ step_index: null, outcome: 'missing_both', effective_study_uid: null }] }] }));
+    await settle(); await click(ui, 'worklist-inspect');
+    expect(ui.incoming.innerHTML).toContain('Rejected: both identifiers missing');
+    expect(ui.incoming.innerHTML).toContain('[&quot;&quot;]');
+    expect(ui.incoming.innerHTML).toContain('2 whole records');
+    expect(ui.incoming.innerHTML).not.toContain('Gateway Study UID');
+    await click(ui, 'worklist-inspection-clear');
+    expect(ui.incoming.innerHTML).toBe('');
+    expect(ui.timeouts.size).toBe(0);
 });

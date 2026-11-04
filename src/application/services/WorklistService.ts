@@ -1,4 +1,5 @@
 import { ScreeningService } from './ScreeningService';
+import { WorklistInspection } from './WorklistInspection';
 import { diagnosticContext, diagnostics, profile } from '../../infrastructure/diagnostics';
 import { randomUUID } from 'crypto';
 import { performance } from 'perf_hooks';
@@ -38,16 +39,28 @@ export class WorklistService {
     recent(): WorklistExplanation[] { return structuredClone(this.history); }
 
     async probe(filters?: WorklistFiltersDto): Promise<WorklistExplanation> {
+        return (await this.runProbe(filters)).report;
+    }
+
+    async inspect() {
+        const inspection = new WorklistInspection();
+        const result = await this.runProbe(undefined, inspection);
+        return { check: result.report, query: result.inspectedQuery, ...inspection.snapshot() };
+    }
+
+    private async runProbe(filters?: WorklistFiltersDto, inspection?: WorklistInspection) {
         if (this.probeRunning) throw new WorklistProbeBusyError();
         this.probeRunning = true;
         try {
-            return (await this.explain({}, filters ? 'filter_preview' : 'gateway_probe', filters)).report;
+            return await this.explain({}, filters ? 'filter_preview' : 'gateway_probe', filters, inspection);
         } finally { this.probeRunning = false; }
     }
 
-    private async explain(query: WorklistQueryDto, source: WorklistExplanation['source'], filters?: WorklistFiltersDto) {
+    private async explain(query: WorklistQueryDto, source: WorklistExplanation['source'], filters?: WorklistFiltersDto, inspection?: WorklistInspection) {
         const started = performance.now();
         const node: MwlNodeConfig = { ...this.config.mwl, ...(filters ? Object.fromEntries(Object.entries(filters).map(([key, value]) => [key, value.trim()])) : {}) };
+        const inspectedQuery = inspection ? { host: node.host, port: node.port, called_ae: node.called_ae, calling_ae: node.calling_ae,
+            requested_procedure_id: node.requested_procedure_id ?? '', modality: node.modality ?? '', scheduled_station_ae: node.scheduled_station_ae ?? '' } : undefined;
         const report: WorklistExplanation = {
             id: randomUUID(), request_id: diagnosticContext.getStore()?.request_id ?? null,
             started_at: new Date().toISOString(), duration_ms: 0, source, stage: 'query', outcome: 'failed', error_code: null,
@@ -67,18 +80,21 @@ export class WorklistService {
                 scheduledDate: query.date,
                 patientId: query.patient_id,
                 accessionNumber: query.accession_number,
-            }, conversion => Object.assign(counts, conversion));
+            }, conversion => Object.assign(counts, conversion), inspection ? (dataset, index) => inspection.receive(dataset, index) : undefined);
             counts.parsed_datasets = datasets.length;
             report.stage = 'mapping';
 
             const entries: WorklistEntryDto[] = [];
             let unusable = 0;
 
-            for (const dataset of datasets) {
+            for (const [datasetIndex, dataset] of datasets.entries()) {
+                inspection?.receive(dataset, datasetIndex + 1);
                 const steps = getSequence(dataset, Tag.ScheduledProcedureStepSequence);
-                for (const step of steps.length ? steps : [undefined]) {
+                for (const [stepIndex, step] of (steps.length ? steps : [undefined]).entries()) {
                     counts.candidate_rows++;
                     const entry = this.toEntry(dataset, step);
+                    inspection?.candidate(datasetIndex + 1, step ? (dataset[Tag.ScheduledProcedureStepSequence]?.Value?.indexOf(step) ?? stepIndex) + 1 : null, entry,
+                        !!getString(dataset, Tag.AccessionNumber), !!getString(dataset, Tag.PatientID), !!getString(dataset, Tag.StudyInstanceUID));
                     if (entry) {
                         entries.push(entry);
                         counts.accepted_rows++;
@@ -113,13 +129,13 @@ export class WorklistService {
             report.stage = 'complete';
             report.outcome = result.length ? 'rows_available' : entries.length ? 'all_completed' :
                 counts.candidate_rows || counts.invalid_json ? 'no_usable_rows' : 'no_matches';
-            return { entries: result, report };
+            return { entries: result, report, inspectedQuery };
         } catch (error) {
             if (error instanceof WorklistQueryError) { report.stage = error.stage; report.error_code = error.code; }
             else report.error_code = report.stage === 'screening_filter' ? 'SCREENING_FILTER_FAILED' :
                 report.stage === 'mapping' ? 'ROW_MAPPING_FAILED' : 'MWL_QUERY_FAILED';
             if (source === 'worklist_request') throw error;
-            return { entries: [], report };
+            return { entries: [], report, inspectedQuery };
         } finally {
             report.duration_ms = Math.round(performance.now() - started);
             this.history.unshift(report);

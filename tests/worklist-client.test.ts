@@ -57,7 +57,10 @@ describe('WorklistClient', () => {
             return args[0].endsWith('1.dcm') ? '{"00100020":{"vr":"LO","Value":["CANARY"]}}' : args[0].endsWith('2.dcm') ? 'null' : 'invalid-CANARY';
         });
         let counts: WorklistConversionCounts | undefined;
-        expect(await client.query(NODE, {}, value => { counts = value; })).toHaveLength(1);
+        const inspect = jest.fn();
+        expect(await client.query(NODE, {}, value => { counts = value; }, inspect)).toHaveLength(1);
+        expect(inspect).toHaveBeenCalledTimes(1);
+        expect(inspect).toHaveBeenCalledWith({ '00100020': { vr: 'LO', Value: ['CANARY'] } }, 1);
         expect(counts).toEqual({ extracted_files: 3, converted_files: 3, invalid_json: 2, parsed_datasets: 1 });
         await expect(fs.access(directory)).rejects.toThrow();
         expect(JSON.stringify(logger.error.mock.calls)).not.toContain('CANARY');
@@ -86,7 +89,9 @@ describe('WorklistClient', () => {
             if (args[0].endsWith('1.dcm')) return '{}';
             throw new Error('CANARY');
         });
-        await expect(client.query(NODE, {}, value => { counts = value; })).rejects.toMatchObject({ code: 'MWL_CONVERSION_FAILED', stage: 'conversion' });
+        const inspect = jest.fn();
+        await expect(client.query(NODE, {}, value => { counts = value; }, inspect)).rejects.toMatchObject({ code: 'MWL_CONVERSION_FAILED', stage: 'conversion' });
+        expect(inspect).toHaveBeenCalledWith({}, 1);
         expect(counts).toMatchObject({ extracted_files: 2, converted_files: 1, parsed_datasets: 1 });
         await expect(fs.access(directory)).rejects.toThrow();
     });
