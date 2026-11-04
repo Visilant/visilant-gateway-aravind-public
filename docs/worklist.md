@@ -35,7 +35,7 @@ findscu -W <mwl.host> <mwl.port> -aec <mwl.called_ae> -aet <mwl.calling_ae> -k <
   `VISILANT`). Many servers accept only calling AE titles that they know, so hospital IT
   must register the gateway's AE title and its IP address.
 - `-X -od` writes each response to a file. The gateway converts each file to JSON with
-  `dcm2json`, reads it, then deletes the folder. Nothing from the worklist is stored.
+  `dcm2json`, reads it, then deletes the folder. Response content is not retained; diagnostics can retain aggregate counts.
 
 ### Keys sent
 
@@ -74,7 +74,8 @@ The gateway logs a warning at start-up when none is set.
 
 All three are in the `mwl` section of `config.json`, and in **Advanced settings** of the
 setup wizard (procedure ID is on the main form). When more than one is set, an order must
-match all of them.
+match all of them. After setup, administrators can also change these filters in
+**Diagnostics → Explain this worklist**; saved dashboard values override the file.
 
 | Setting | DICOM tag | Use it when |
 |---|---|---|
@@ -105,7 +106,8 @@ These are DICOM rules. The worklist server applies them, not the gateway.
 - A lone `*` is meant to match everything. Some servers apply it only to orders where the
   field has a value, and drop orders where it is empty. To match everything, **remove the
   key** from `mwl` in `config.json` (or leave the field blank in the setup wizard) rather
-  than writing `*`. An empty string `""` is not allowed: the gateway refuses to start.
+  than writing `*`. In the JSON file, empty strings are rejected for procedure ID and modality; omit those
+  keys instead. The dashboard removes a filter when its field is blank.
 - Date matching accepts a single date `20261010` or a range `20261001-20261031`.
 
 ## What the gateway does with the responses
@@ -127,6 +129,71 @@ These are DICOM rules. The worklist server applies them, not the gateway.
 
 The row returned to the phone is defined in `src/application/dto/worklist.dto.ts`
 (`WorklistEntryDto`).
+
+## Explain an empty worklist in the dashboard
+
+1. Sign in at `/ui`, open **Diagnostics → Explain this worklist**.
+2. Refresh **Patients to Screen** on the phone, then select **Refresh results** in the
+   dashboard. A “Worklist API request” can come from a phone or another API client;
+   it is not proof that a particular phone displayed the response.
+3. Read the counts from hospital response files through parsed datasets, candidate
+   steps, usable rows, completed rows hidden locally, and rows prepared for the client.
+   Missing accession, missing Patient ID and both missing are separate, mutually
+   exclusive rejection counts. A failed stage leaves later totals unknown; shown
+   counts are partial. Derived Study UIDs are counted separately.
+4. If the accession is empty, ask AEH to publish its imaging order ID in `(0008,0050)`.
+   Numeric strings and leading zeros are already preserved. The gateway cannot recover
+   an API order ID that Freedom MWL never sends.
+5. **Run gateway-only check** queries the saved configuration directly. It reads already
+   recorded screening completion without reconciling or changing it. It does not contact
+   the phone, create captures, release orders or send images to PACS.
+6. Administrators can preview a different combination of the three filters without
+   saving it. **Save filters** applies them to all connected phones on their next refresh.
+   Use values confirmed for anterior imaging: `OP` can also match fundus orders and a
+   procedure description is not a procedure ID.
+7. For a local support call, an administrator can select **Inspect incoming records**.
+   This runs a fresh gateway-only query using the saved filters. The screen shows the
+   endpoint and filters used, actual accession and patient identifiers, incoming Study
+   UID, procedure fields, scheduled steps and expandable received DICOM JSON. Rejected
+   records remain visible. The gateway's effective Study UID is labelled separately as
+   received or derived; it does not replace the incoming value in the inspector.
+
+This inspector shows the parsed response before gateway mapping, including fields the
+mapper does not use. JSON notation preserves leading zeros and padding; `[""]` is an
+empty string, “Empty value” means the element has no values, and “Not sent” means the
+tag is absent. Mapping outcomes explain required identifiers, while completed-order
+filtering remains an aggregate count above. A later conversion failure leaves earlier
+parsed records available and marks mapping unavailable. Invalid JSON cannot be inspected.
+
+Patient values are only in the explicit inspection response and temporary browser view.
+They are not saved in the database, recent checks, logs or diagnostic/support archives.
+Use **Clear records** when finished; the view also clears after five minutes, on refresh,
+navigation and sign-out. Earlier phone requests cannot be reopened as raw records.
+The probe does not establish what a phone received or displayed and does not modify
+screenings, images or configuration.
+
+The view includes at most 100 records, each at most 64 KiB, with a combined 512 KiB
+raw JSON/candidate detail budget and at most 1,000 candidate details. Omitted records
+and details are counted visibly; included identifiers are never shortened to fit.
+If needed, narrow the saved filters using values confirmed by AEH, then inspect again.
+
+The last 20 finished checks are retained in memory and cleared at restart. Each has a
+unique check ID and HTTP request reference; concurrent requests keep separate counters.
+Recording is independent of this short history. When enabled, the existing bounded
+recorder stores `worklist.explanation` events with counts and filter-presence flags.
+Turn recording on before reproducing a problem if the evidence must survive restart.
+The regular segment archive shows dropped events and recording limits.
+
+**Download support summary** exports only recent summaries, safe build/runtime metadata,
+filter-presence flags, and capability limits. It omits names, patient and order identifiers,
+query values, full settings, paths, credentials, raw errors and response datasets. It is a
+snapshot of the bounded history, not an end-to-end phone trace or a complete event archive.
+The Windows launcher identifies the packaged commit, build time and modified-source flag;
+other launches without a recognized build ID show **unverified**.
+
+Phone display remains **not observed** and hospital order completion **not integrated**.
+Use **Queue** and **Screenings** for local capture and PACS delivery evidence. PACS
+acceptance does not establish completion in AEH's application.
 
 ## Test the worklist by hand
 

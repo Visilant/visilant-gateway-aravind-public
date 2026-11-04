@@ -68,7 +68,7 @@ Copy-Item $magick (Join-Path $runtime.FullName 'imagemagick') -Recurse
 $nodeLicense = Join-Path (Split-Path $node -Parent) 'LICENSE'
 if (-not (Test-Path $nodeLicense)) { throw 'Use the official Node Windows archive and retain its LICENSE alongside node.exe.' }
 Copy-Item $nodeLicense (Join-Path $runtime.FullName 'NODE-LICENSE')
-Copy-Item (Join-Path $PSScriptRoot 'install.ps1'),(Join-Path $PSScriptRoot 'run.ps1'),(Join-Path $PSScriptRoot 'firewall.ps1'),(Join-Path $PSScriptRoot 'Gateway.cmd'),(Join-Path $PSScriptRoot 'verify-runtime.cjs') $bundle
+Copy-Item (Join-Path $PSScriptRoot 'install.ps1'),(Join-Path $PSScriptRoot 'run.ps1'),(Join-Path $PSScriptRoot 'firewall.ps1'),(Join-Path $PSScriptRoot 'Gateway.cmd'),(Join-Path $PSScriptRoot 'verify-runtime.cjs'),(Join-Path $PSScriptRoot 'uninstall.ps1'),(Join-Path $PSScriptRoot 'uninstall.sh') $bundle
 Copy-Item (Join-Path $root 'docs/windows-gateway.md') (Join-Path $bundle 'README.md')
 $manifest = [ordered]@{ version=1; source_commit=(& git rev-parse HEAD); working_tree_dirty=([bool](& git status --porcelain)); built_at=(Get-Date).ToUniversalTime().ToString('o'); files=@() }
 $manifest.files = @(Get-ChildItem $bundle -File -Recurse | ForEach-Object {

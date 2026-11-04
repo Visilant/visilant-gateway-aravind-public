@@ -11,6 +11,7 @@ import { CaptureRepository } from './infrastructure/database/repositories';
 import { DiagnosticsService, RetentionService, ScreeningExpiry, SyncWorker, SystemService } from './application/services';
 import { GatewayServer } from './presentation/server';
 import { CONFIG, DATABASE, LOGGER, RECORDER } from './tokens';
+import { WorklistSettingsService } from './application/services/WorklistSettingsService';
 
 // An installed launcher owns this child. Do not leave an orphan queue worker behind
 // if Task Scheduler restarts a crashed launcher. Startup recovery handles interruption.
@@ -25,16 +26,17 @@ async function bootstrap(): Promise<void> {
     const config = loadConfig();
     Container.set(CONFIG, config);
     diagnostics.setResourceProbe(() => storageSample(path.resolve(config.storage_root), path.resolve(config.database_path)));
-    if (!config.mwl.requested_procedure_id && !config.mwl.modality && !config.mwl.scheduled_station_ae) {
-        // Valid, but almost certainly a commissioning mistake: the worklist will list every
-        // open order at the centre, and an operator can capture against the wrong one.
-        logger.warn('No worklist filter is set (mwl.requested_procedure_id, mwl.modality or mwl.scheduled_station_ae). The worklist is unfiltered.');
-    }
     mkdirSync(path.resolve(config.storage_root), { recursive: true });
 
     // Opens the database and runs any pending migrations.
     const database = await createDatabase(config, logger);
     Container.set(DATABASE, database);
+    await Container.get(WorklistSettingsService).restoreAtBoot();
+    if (!config.mwl.requested_procedure_id && !config.mwl.modality && !config.mwl.scheduled_station_ae) {
+        // Valid, but almost certainly a commissioning mistake: the worklist will list every
+        // open order at the centre, and an operator can capture against the wrong one.
+        logger.warn('No worklist filter is set (mwl.requested_procedure_id, mwl.modality or mwl.scheduled_station_ae). The worklist is unfiltered.');
+    }
 
     // Boot recovery. This box loses power mid-send as a matter of routine, and a row
     // left in SENDING has no other owner to reclaim it — without this, those captures

@@ -15,6 +15,14 @@ Problems seen at sites, what causes them, and how to fix them. Commands are for
 | Health check | `http://127.0.0.1:8080/health` in a browser on the gateway computer |
 | Operator page | `http://127.0.0.1:8080/ui` |
 
+For missing worklist orders, use **Diagnostics → Explain this worklist** in the operator
+page first. It distinguishes missing order numbers, missing patient IDs, conversion loss,
+local completion filtering and a query that returned no matches. Administrators can
+preview and save the three worklist filters there, or select **Inspect incoming records**
+to view actual identifiers and rejected datasets from a fresh query. Patient values are
+temporary and excluded from support exports. [Worklist debugging](worklist.md#explain-an-empty-worklist-in-the-dashboard)
+explains the workflow and the support summary download.
+
 Search the gateway log:
 
 ```powershell

@@ -40,6 +40,30 @@ unfiltered-worklist warning at start-up. How to choose: [worklist.md](worklist.m
 - `modality`: Modality (0008,0060) in the scheduled step, for example `OP`; omit to match any modality.
 - `scheduled_station_ae`: Scheduled Station AE Title (0040,0001); limits results to orders scheduled for this device.
 
+## Change worklist filters in the dashboard
+
+An administrator can open **Diagnostics → Explain this worklist** at `/ui`, edit the
+station AE, procedure ID and modality, and **Preview these filters** before saving.
+Empty fields remove filters. The dashboard accepts printable ASCII values up to 16
+characters and trims surrounding spaces. A preview never changes the saved settings.
+
+**Save filters** takes effect on subsequent worklist requests, without restarting the
+gateway. It persists all three fields together in SQLite as `worklist.filters.v1`.
+These values override the three filters from `config.json` at startup; `/system/config`
+shows the effective configuration. Other settings still come from the config file.
+**Restore config-file filters** removes the override and uses the file values loaded at
+startup. To pick up later edits to that file, restart the gateway as well.
+
+Two dashboard sessions cannot overwrite each other's changes silently: a stale save
+returns 409 and must be reloaded. A failed database write leaves the active settings
+unchanged. Damaged saved filters stop startup rather than silently broadening the worklist.
+Only administrators can preview alternative filters, save them or reset them. Operators
+can inspect results and check the current filters.
+
+These controls change matching keys. They do not supply a missing Accession Number or
+map a patient identifier into an order identifier. An alternate order-ID mapping requires
+AEH to confirm the exact input tag and its unique-per-order meaning first.
+
 ## Environment
 
 | Variable | Purpose |

@@ -1,8 +1,10 @@
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import type { MwlNodeConfig } from '../src/config';
 import { WorklistClient } from '../src/infrastructure/dicom';
+import { WorklistConversionCounts } from '../src/infrastructure/dicom/WorklistClient';
+import { DicomTimeoutError, ToolMissingError } from '../src/infrastructure/dicom/DicomClient';
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 const NODE: MwlNodeConfig = {
@@ -41,5 +43,56 @@ describe('WorklistClient', () => {
 
         const withDate = await capture(NODE, { scheduledDate: '20260101' });
         expect(withDate.some((a) => a.endsWith('0040,0002=20260101'))).toBe(true);
+    });
+
+    it('counts converted and malformed responses separately and cleans temporary patient files', async () => {
+        const client = new WorklistClient(logger as never);
+        let directory = '';
+        jest.spyOn(client as unknown as { run: (bin: string, args: string[]) => Promise<string> }, 'run').mockImplementation(async (_bin, args) => {
+            if (args[0] === '-W') {
+                directory = args[args.length - 1];
+                for (const file of ['1.dcm', '2.dcm', '3.dcm']) await fs.writeFile(path.join(directory, file), 'synthetic');
+                return '';
+            }
+            return args[0].endsWith('1.dcm') ? '{"00100020":{"vr":"LO","Value":["CANARY"]}}' : args[0].endsWith('2.dcm') ? 'null' : 'invalid-CANARY';
+        });
+        let counts: WorklistConversionCounts | undefined;
+        const inspect = jest.fn();
+        expect(await client.query(NODE, {}, value => { counts = value; }, inspect)).toHaveLength(1);
+        expect(inspect).toHaveBeenCalledTimes(1);
+        expect(inspect).toHaveBeenCalledWith({ '00100020': { vr: 'LO', Value: ['CANARY'] } }, 1);
+        expect(counts).toEqual({ extracted_files: 3, converted_files: 3, invalid_json: 2, parsed_datasets: 1 });
+        await expect(fs.access(directory)).rejects.toThrow();
+        expect(JSON.stringify(logger.error.mock.calls)).not.toContain('CANARY');
+    });
+
+    it.each([
+        [new DicomTimeoutError('CANARY'), 'MWL_TIMEOUT'],
+        [new ToolMissingError('CANARY'), 'MWL_TOOL_UNAVAILABLE'],
+        [new Error('CANARY'), 'MWL_QUERY_FAILED'],
+    ])('classifies failed queries without exposing raw errors', async (error, code) => {
+        const client = new WorklistClient(logger as never);
+        jest.spyOn(client as unknown as { run: () => Promise<string> }, 'run').mockRejectedValue(error);
+        await expect(client.query(NODE)).rejects.toMatchObject({ code, stage: 'query' });
+    });
+
+    it('converter failure aborts the query and retains partial conversion counts', async () => {
+        const client = new WorklistClient(logger as never);
+        let directory = '', counts: WorklistConversionCounts | undefined;
+        jest.spyOn(client as unknown as { run: (bin: string, args: string[]) => Promise<string> }, 'run').mockImplementation(async (_bin, args) => {
+            if (args[0] === '-W') {
+                directory = args[args.length - 1];
+                await fs.writeFile(path.join(directory, '1.dcm'), 'synthetic');
+                await fs.writeFile(path.join(directory, '2.dcm'), 'synthetic');
+                return '';
+            }
+            if (args[0].endsWith('1.dcm')) return '{}';
+            throw new Error('CANARY');
+        });
+        const inspect = jest.fn();
+        await expect(client.query(NODE, {}, value => { counts = value; }, inspect)).rejects.toMatchObject({ code: 'MWL_CONVERSION_FAILED', stage: 'conversion' });
+        expect(inspect).toHaveBeenCalledWith({}, 1);
+        expect(counts).toMatchObject({ extracted_files: 2, converted_files: 1, parsed_datasets: 1 });
+        await expect(fs.access(directory)).rejects.toThrow();
     });
 });

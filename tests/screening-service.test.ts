@@ -229,3 +229,14 @@ test('rolling the release migration back leaves no dangling capture reference', 
  expect((await captures.findById('capture-3'))?.screening_id).toBe('screening-2');
  await db.runMigrations(); expect(await db.query('PRAGMA foreign_key_check')).toEqual([]);
 });
+
+test('diagnostic filtering does not reconcile completed captures or write screening state', async () => {
+ await service.register(manifest); await addCapture('capture-1', CaptureStatus.SENT); await addCapture('capture-2', CaptureStatus.SENT);
+ const repository = new ScreeningRepository(db);
+ expect((await repository.find(manifest.id))?.completed_at).toBeNull();
+ expect(await service.filter([entry], false)).toHaveLength(1);
+ expect((await repository.find(manifest.id))?.completed_at).toBeNull();
+ expect(await service.filter([entry])).toHaveLength(0);
+ expect((await repository.find(manifest.id))?.completed_at).not.toBeNull();
+ expect(await service.filter([entry], false)).toHaveLength(0);
+});
