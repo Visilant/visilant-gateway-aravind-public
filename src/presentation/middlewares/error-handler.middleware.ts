@@ -58,9 +58,11 @@ export class ErrorHandlerMiddleware implements ExpressErrorMiddlewareInterface {
     }
 }
 
-// Upload limits are the client's problem, not ours: too large is 413, anything else
-// multer rejects (a second file, a wrong field name) is a malformed request.
+// Upload and body limits are the client's problem, not ours: too large is 413, anything
+// else multer rejects (a second file, a wrong field name) is a malformed request.
 function multerStatus(error: unknown): number {
-    if (!(error instanceof MulterError)) return 500;
-    return error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    if (error instanceof MulterError) return error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    const bodyError = error as { type?: unknown; status?: unknown; statusCode?: unknown } | null;
+    if (bodyError?.type === 'entity.too.large' || bodyError?.status === 413 || bodyError?.statusCode === 413) return 413;
+    return 500;
 }

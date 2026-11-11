@@ -156,10 +156,10 @@ test('phone diagnostics routes require auth, validate DTOs without echoing rejec
     const validBatch = {
         device_id: device,
         batch_id: batch,
-        manufacturer: 'Synthetic',
-        device_model: 'Pixel Test',
+        manufacturer: 'motorola',
+        device_model: 'moto g(30)',
         android_version: '14',
-        api_level: 34,
+        api_level: 55,
         app_version: '2.1.0',
         model_revision: 'eye-2026.10',
         status: { battery_level: 85, charging: true, wifi_connected: true, seeker_connected: true, seeker_generation: 2 },
@@ -167,9 +167,15 @@ test('phone diagnostics routes require auth, validate DTOs without echoing rejec
             { stream: 'events', name: 'capture.burst', sequence: 1, utc_ms: 1700000000000, monotonic_ms: 1000, duration_ms: 45, outcome: 'ok', attributes: { trigger: 'auto', shot_count: 5, quality_score: 120, patient_name: 'CANARY^SECRET' } },
         ],
         crashes: [
-            { crash_id: crashId, source: 'js', utc_ms: 1700000001000, error_type: 'TypeError', message: 'boom on patient CANARY^SECRET', stack: ['at Capture (file:///data/user/0/app/src/Capture.js:12:4)'], route: 'Capture' },
+            { crash_id: crashId, source: 'js', utc_ms: 1700000001000, error_type: 'TypeError', message: 'boom on patient CANARY^SECRET', stack: ['at Capture (file:///data/user/0/app/src/Capture.js:12:4)'], route: 'Capture', app_version: '2.0.9' },
         ],
     };
+
+    // Oversized JSON payloads return 413 rather than 500.
+    const tooLarge = await fetch(base + '/diagnostics/phones/events', {
+        method: 'POST', headers, body: JSON.stringify({ ...validBatch, padding: 'x'.repeat(1100 * 1024) }),
+    });
+    expect(tooLarge.status).toBe(413);
 
     // Unknown top-level or nested keys are rejected with 400 and never echoed back.
     const rejected = await fetch(base + '/diagnostics/phones/events', {

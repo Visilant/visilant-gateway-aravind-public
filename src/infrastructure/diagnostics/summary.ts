@@ -136,7 +136,7 @@ export function detectorSummary(events: SummaryEvent[]): DetectorSummary {
     const scores: number[] = [];
     for (const event of events) {
         const a = event.attributes ?? {};
-        if (event.name === 'capture.burst') {
+        if (event.name === 'capture.burst' && (event.outcome ?? 'ok') === 'ok') {
             if (a.trigger === 'auto') bursts_auto++;
             else if (a.trigger === 'manual') bursts_manual++;
             const score = finiteOrNull(a.quality_score) ?? finiteOrNull(a.quality_score_max);

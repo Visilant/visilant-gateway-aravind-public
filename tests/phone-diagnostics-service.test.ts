@@ -46,18 +46,21 @@ test('ingest writes a phone manifest with counters and the latest status snapsho
         event('network.change', { network_kind: 'none', wifi_connected: false }),
         event('network.change', { network_kind: 'wifi', wifi_connected: true }),
         event('capture.burst', { trigger: 'auto', shot_count: 5, quality_score: 100 }),
+        event('capture.burst', { trigger: 'auto', shot_count: 5, quality_score: 50 }, { outcome: 'aborted' }),
         event('assessment.result', { assessment_status: 'ready' }),
         event('assessment.result', { assessment_status: 'unavailable', assessment_reason: 'eye_not_detected' }),
         { ...event('resource.sample', { battery_level: 80 }), stream: 'resources' },
-    ], [crash()]);
-    expect(await service.ingest(first)).toEqual({ accepted_events: 7, accepted_crashes: 1, duplicate_batch: false });
+    ], [crash(), crash({ app_version: '2.0.9' })]);
+    expect(await service.ingest(first)).toEqual({ accepted_events: 8, accepted_crashes: 2, duplicate_batch: false });
     const [phone] = (await service.listPhones()).phones;
     expect(phone).toMatchObject({
         device_id: device, manufacturer: 'Synthetic', device_model: 'Pixel Test', app_version: '2.1.0', model_revision: 'eye-2026.10',
         status: { battery_level: 80, seeker_generation: 2 },
-        counts: { events: 7, crashes: 1, seeker_disconnects: 1, wifi_disconnects: 1, captures_taken: 5, assessments_ready: 1, assessments_unavailable: 1 },
+        counts: { events: 7, crashes: 2, seeker_disconnects: 1, wifi_disconnects: 1, captures_taken: 5, assessments_ready: 1, assessments_unavailable: 1 },
     });
     expect(typeof phone.first_seen_at).toBe('string');
+    const detail = await service.phoneDetail(device);
+    expect(detail.crashes.map(c => c.app_version)).toEqual(['2.0.9', null]);
 
     // A second batch accumulates counters and replaces the status snapshot.
     await service.ingest(batch(device, [event('capture.burst', { trigger: 'manual', shot_count: 3 })], [], { app_version: '2.1.1', status: { battery_level: 42, charging: true } }));

@@ -192,12 +192,15 @@ export class DiagnosticsService {
                 span_id: diagnosticId(item.span_id),
                 attributes,
             };
-            if (item.stream === 'resources') resources.push(record);
-            else events.push(record);
+            if (item.stream === 'resources') {
+                resources.push(record);
+                continue;
+            }
+            events.push(record);
 
             if (item.name === 'seeker.disconnected') seeker_disconnects++;
             if (item.name === 'network.change' && attributes.wifi_connected === false) wifi_disconnects++;
-            if (item.name === 'capture.burst') {
+            if (item.name === 'capture.burst' && item.outcome === 'ok') {
                 const shots = typeof attributes.shot_count === 'number' && attributes.shot_count > 0 ? Math.floor(attributes.shot_count) : 1;
                 captures_taken += shots;
             }
@@ -221,7 +224,7 @@ export class DiagnosticsService {
             run_id: diagnosticId(item.run_id),
             operation_id: diagnosticId(item.operation_id),
             device_state: this.cleanStatus(item.device_state),
-            app_version: batch.app_version,
+            app_version: item.app_version ?? null,
             received_at,
         }));
 
@@ -248,7 +251,7 @@ export class DiagnosticsService {
                     last_seen_at: received_at,
                     status: status ?? previous?.status ?? null,
                     counts: {
-                        events: prevCounts.events + batch.events.length,
+                        events: prevCounts.events + events.length,
                         crashes: prevCounts.crashes + crashes.length,
                         seeker_disconnects: prevCounts.seeker_disconnects + seeker_disconnects,
                         wifi_disconnects: prevCounts.wifi_disconnects + wifi_disconnects,

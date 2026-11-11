@@ -83,6 +83,8 @@ export class PhoneCrashItemDto {
     run_id?: string | null;
     @IsOptional() @IsUUID()
     operation_id?: string | null;
+    @IsOptional() @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9_ .:+/(),-]{1,32}$/)
+    app_version?: string | null;
     @IsOptional() @ValidateNested() @Type(() => PhoneStatusSnapshotDto)
     device_state?: PhoneStatusSnapshotDto | null;
 }
@@ -92,15 +94,15 @@ export class PhoneBatchDto {
     device_id!: string;
     @IsUUID()
     batch_id!: string;
-    @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9_ .:-]{1,64}$/)
+    @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9_ .:+/(),'-]{1,64}$/)
     manufacturer!: string;
-    @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9_ .:-]{1,64}$/)
+    @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9_ .:+/(),'-]{1,64}$/)
     device_model!: string;
-    @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9_.:-]{1,32}$/)
+    @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9_ .:+/(),-]{1,32}$/)
     android_version!: string;
-    @IsInt() @Min(21) @Max(50)
+    @IsInt() @Min(21)
     api_level!: number;
-    @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9_.:+-]{1,32}$/)
+    @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9_ .:+/(),-]{1,32}$/)
     app_version!: string;
     @IsOptional() @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9._-]{1,64}$/)
     model_revision?: string | null;
