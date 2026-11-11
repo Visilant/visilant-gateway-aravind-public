@@ -138,3 +138,79 @@ test('incoming records require admin auth, are not cached, and never enter suppo
     expect(contents).toContain('worklist.explanation');
     expect(contents).not.toMatch(/CANARY|dicom_json|effective_study_uid/);
 });
+
+test('phone diagnostics routes require auth, validate DTOs without echoing rejected values, and serve detail and zip archives', async () => {
+    const device = '11111111-2222-4333-8444-555555555555';
+    const batch = '66666666-7777-4888-9999-aaaaaaaaaaaa';
+    const crashId = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
+    for (const [route, method] of [
+        ['/diagnostics/phones', 'GET'],
+        [`/diagnostics/phones/${device}`, 'GET'],
+        [`/diagnostics/phones/${device}/archive`, 'GET'],
+        ['/diagnostics/phones/events', 'POST'],
+    ] as const) {
+        expect((await fetch(base + route, { method })).status).toBe(401);
+    }
+
+    const headers = { Authorization: 'Bearer test', 'Content-Type': 'application/json' };
+    const validBatch = {
+        device_id: device,
+        batch_id: batch,
+        manufacturer: 'Synthetic',
+        device_model: 'Pixel Test',
+        android_version: '14',
+        api_level: 34,
+        app_version: '2.1.0',
+        model_revision: 'eye-2026.10',
+        status: { battery_level: 85, charging: true, wifi_connected: true, seeker_connected: true, seeker_generation: 2 },
+        events: [
+            { stream: 'events', name: 'capture.burst', sequence: 1, utc_ms: 1700000000000, monotonic_ms: 1000, duration_ms: 45, outcome: 'ok', attributes: { trigger: 'auto', shot_count: 5, quality_score: 120, patient_name: 'CANARY^SECRET' } },
+        ],
+        crashes: [
+            { crash_id: crashId, source: 'js', utc_ms: 1700000001000, error_type: 'TypeError', message: 'boom on patient CANARY^SECRET', stack: ['at Capture (file:///data/user/0/app/src/Capture.js:12:4)'], route: 'Capture' },
+        ],
+    };
+
+    // Unknown top-level or nested keys are rejected with 400 and never echoed back.
+    const rejected = await fetch(base + '/diagnostics/phones/events', {
+        method: 'POST', headers, body: JSON.stringify({ ...validBatch, patient_name: 'CANARY-TOP-SECRET' }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).not.toContain('CANARY-TOP-SECRET');
+
+    const first = await fetch(base + '/diagnostics/phones/events', { method: 'POST', headers, body: JSON.stringify(validBatch) });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ data: { accepted_events: 1, accepted_crashes: 1, duplicate_batch: false } });
+
+    const duplicate = await fetch(base + '/diagnostics/phones/events', { method: 'POST', headers, body: JSON.stringify(validBatch) });
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toEqual({ data: { accepted_events: 0, accepted_crashes: 0, duplicate_batch: true } });
+
+    const list = await fetch(base + '/diagnostics/phones', { headers });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({ data: { phones: [{ device_id: device, counts: { events: 1, crashes: 1, captures_taken: 5 } }] } });
+
+    const detail = await fetch(base + `/diagnostics/phones/${device}`, { headers });
+    expect(detail.status).toBe(200);
+    const detailText = await detail.text();
+    expect(detailText).not.toContain('CANARY');
+    expect(JSON.parse(detailText)).toMatchObject({
+        data: {
+            phone: { device_id: device },
+            crashes: [{ crash_id: crashId, message: 'boom on [redacted]', stack: ['at Capture (src/Capture.js:12:4)'] }],
+            captures_and_models: { detector: { bursts_auto: 1, quality_score_p50: 120 } },
+        },
+    });
+
+    expect((await fetch(base + '/diagnostics/phones/not-a-uuid', { headers })).status).toBe(400);
+    expect((await fetch(base + '/diagnostics/phones/00000000-0000-4000-8000-000000000000', { headers })).status).toBe(404);
+    expect((await fetch(base + '/diagnostics/phones/00000000-0000-4000-8000-000000000000/archive', { headers })).status).toBe(404);
+
+    const zipRes = await fetch(base + `/diagnostics/phones/${device}/archive`, { headers });
+    expect(zipRes.status).toBe(200);
+    expect(zipRes.headers.get('content-type')).toBe('application/zip');
+    expect(zipRes.headers.get('content-disposition')).toContain(`${device}.zip`);
+    const bytes = Buffer.from(await zipRes.arrayBuffer());
+    expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    expect(bytes.includes(Buffer.from('CANARY'))).toBe(false);
+});

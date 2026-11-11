@@ -163,11 +163,64 @@
   const eventsTable = events => `<h2>Events</h2><table class="rows"><thead><tr><th>Name</th><th class="num">Count</th></tr></thead><tbody>${events.map(row => `<tr><td class="mono">${esc(row.name)}</td><td class="num">${esc(row.count)}</td></tr>`).join('')}</tbody></table>`;
   const captureRefs = captures => captures.length ? captures.map(row => `${linkCapture(row.id)} <span class="muted">${esc(row.status)}</span>`).join(' · ') : '—';
   const segmentLink = id => `<a class="mono" href="#/diagnostics/segments/${esc(pathId(id))}">${esc(id)}</a>`;
+  const phoneLink = id => `<a class="mono" href="#/diagnostics/phones/${esc(pathId(id))}">${esc(String(id).slice(0, 8))}</a>`;
+  const fmtNum = (value, digits = 1) => value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toFixed(digits);
+  const phonesTable = phones => phones.length ? `<div class="table-scroll"><table class="rows"><thead><tr><th>Phone</th><th>Model</th><th>App</th><th>Model rev</th><th>Battery</th><th>Wi-Fi</th><th>Seeker</th><th class="num">Crashes</th><th class="num">Captures</th><th>Last seen</th><th></th></tr></thead><tbody>${phones.map(p => {
+    const s = p.status || {}, c = p.counts || {};
+    return `<tr><td>${phoneLink(p.device_id)}</td><td>${esc(`${p.manufacturer || ''} ${p.device_model || ''}`.trim() || '—')}</td><td>${esc(p.app_version || '—')}</td><td>${esc(p.model_revision || '—')}</td><td>${esc(s.battery_level == null ? '—' : `${s.battery_level}%${s.charging ? ' ⚡' : ''}`)}</td><td>${esc(s.wifi_connected == null ? (s.network_kind || '—') : (s.wifi_connected ? 'connected' : 'offline'))}</td><td>${esc(s.seeker_connected == null ? '—' : (s.seeker_connected ? `connected${s.seeker_generation != null ? ` (gen ${s.seeker_generation})` : ''}` : 'disconnected'))}</td><td class="num ${esc(c.crashes ? 'error' : '')}">${esc(c.crashes ?? 0)}</td><td class="num">${esc(c.captures_taken ?? 0)}</td><td>${esc(date(p.last_seen_at))}</td><td><button data-action="phone-archive" data-id="${esc(p.device_id)}">Download ZIP</button></td></tr>`;
+  }).join('')}</tbody></table></div>` : '<p class="muted">No phones have reported yet.</p>';
+  const phoneDetailView = detail => {
+    const p = detail.phone, s = p.status || {}, c = p.counts || {}, cm = detail.captures_and_models || {}, det = cm.detector || {}, asmt = cm.assessments || {}, byTask = asmt.by_task || {}, conf = asmt.confidence_p50 || {}, ent = asmt.entropy_p50 || {};
+    const taskCounts = task => {
+      const entries = Object.entries(byTask[task] || {});
+      return entries.length ? entries.map(([k, v]) => `${k}: ${v}`).join(' · ') : '—';
+    };
+    const attrSummary = attrs => {
+      const entries = Object.entries(attrs || {}).filter(([, v]) => v != null);
+      return entries.length ? entries.map(([k, v]) => `${k}=${v}`).join(' · ') : '—';
+    };
+    return `<div class="crumbs"><a href="#/diagnostics">Diagnostics</a> › <a href="#/diagnostics/phones">Phones</a> › <span class="mono">${esc(p.device_id)}</span></div>
+      <div class="toolbar"><h1>${esc(`${p.manufacturer || ''} ${p.device_model || ''}`.trim() || p.device_id)}</h1><button data-action="phone-archive" data-id="${esc(p.device_id)}">Download ZIP</button></div>
+      <p class="muted">Android ${esc(p.android_version)} (API ${esc(p.api_level)}) · App ${esc(p.app_version)} · Model ${esc(p.model_revision || '—')} · Last seen ${esc(date(p.last_seen_at))}</p>
+      <h2>Device status</h2>
+      ${kv([
+        ['Battery', s.battery_level == null ? '—' : `${s.battery_level}%${s.charging ? ' (charging)' : ''}${s.battery_temperature_c != null ? ` · ${s.battery_temperature_c} °C` : ''}`],
+        ['Charging', s.charging == null ? '—' : (s.charging ? 'Yes' : 'No')],
+        ['Thermal status', s.thermal_status == null ? '—' : s.thermal_status],
+        ['Wi-Fi status', s.wifi_connected == null ? (s.network_kind || '—') : `${s.wifi_connected ? 'Connected' : 'Disconnected'}${s.network_kind ? ` (${s.network_kind})` : ''}`],
+        ['Seeker', s.seeker_connected == null ? '—' : `${s.seeker_connected ? 'Connected' : 'Disconnected'}${s.seeker_generation != null ? ` · gen ${s.seeker_generation}` : ''}`],
+        ['Upload queue', `${s.pending_uploads ?? 0} pending · ${s.failed_uploads ?? 0} failed`],
+        ['Free storage', fmtBytes(s.free_storage_bytes)],
+        ['Totals', `${c.events ?? 0} events · ${c.crashes ?? 0} crashes · ${c.seeker_disconnects ?? 0} Seeker disconnects · ${c.wifi_disconnects ?? 0} Wi-Fi disconnects`],
+      ])}
+      <h2>Crashes</h2>
+      ${detail.crashes?.length ? `<div class="table-scroll"><table class="rows"><thead><tr><th>Time</th><th>Source</th><th>Route</th><th>Type</th><th>Message &amp; stack</th></tr></thead><tbody>${detail.crashes.map(cr => `<tr><td>${esc(date(cr.utc_ms))}</td><td>${esc(cr.source)}</td><td>${esc(cr.route || '—')}</td><td class="mono">${esc(cr.error_type)}</td><td><div>${esc(cr.message)}</div>${cr.stack?.length ? `<details><summary>Stack trace (${esc(cr.stack.length)})</summary><pre class="mono">${esc(cr.stack.join('\n'))}</pre></details>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No crashes recorded.</p>'}
+      <h2>Seeker &amp; Wi-Fi connectivity</h2>
+      ${detail.connectivity?.length ? `<div class="table-scroll"><table class="rows"><thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Details</th></tr></thead><tbody>${detail.connectivity.map(ev => `<tr><td>${esc(date(ev.utc_ms))}</td><td class="mono">${esc(ev.name)}</td><td>${esc(ev.outcome)}</td><td>${esc(attrSummary(ev.attributes))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No connectivity transitions recorded.</p>'}
+      <h2>Capture &amp; AI model telemetry</h2>
+      ${kv([
+        ['Capture bursts (auto / manual)', `${det.bursts_auto ?? 0} auto · ${det.bursts_manual ?? 0} manual`],
+        ['Suggested frame (kept / overridden)', `${det.suggested_kept ?? 0} kept · ${det.suggested_overridden ?? 0} overridden`],
+        ['Sharpness quality score (p50 / p95)', `${fmtNum(det.quality_score_p50, 1)} / ${fmtNum(det.quality_score_p95, 1)}`],
+        ['Assessments (ready / eye gate rejected / failed)', `${asmt.ready ?? 0} ready · ${asmt.eye_not_detected ?? 0} eye not detected · ${asmt.failed_or_timeout ?? 0} failed or timeout`],
+      ])}
+      <table class="rows"><thead><tr><th>Task</th><th>Class counts</th><th class="num">Confidence p50</th><th class="num">Entropy p50</th></tr></thead><tbody>${['cornea', 'lens', 'pterygium'].map(task => `<tr><td>${esc(task[0].toUpperCase() + task.slice(1))}</td><td>${esc(taskCounts(task))}</td><td class="num">${esc(fmtNum(conf[task], 2))}</td><td class="num">${esc(fmtNum(ent[task], 2))}</td></tr>`).join('')}</tbody></table>
+      ${spansTable(cm.spans || [])}`;
+  };
   views.diagnostics = async rest => {
     if (rest[0] === 'worklist') return worklistDiagnostics();
+    if (rest[0] === 'phones') {
+      if (rest.length === 1) {
+        const { phones = [] } = await api('/diagnostics/phones');
+        return `<div class="crumbs"><a href="#/diagnostics">Diagnostics</a> › Phones</div><h1>Connected phones, crashes &amp; model telemetry</h1>${phonesTable(phones)}`;
+      }
+      if (rest.length === 2) return phoneDetailView(await api(`/diagnostics/phones/${pathId(rest[1])}`));
+      throw new ApiError('Diagnostic page not found', 404);
+    }
     if (!rest.length) {
-      const result = await api('/diagnostics'), recording = result.recording;
-      return `<h1>Diagnostics</h1><p><a href="#/diagnostics/worklist">Explain this worklist</a> — find out why an order is missing.</p><div class="toolbar"><span>${esc(recording.enabled ? `Recording on at ${recording.directory}` : 'Recording off')}</span>${recording.locked_by === 'env' ? '<span class="muted">Controlled by GATEWAY_DIAGNOSTICS_DIR on this process</span>' : `<button data-action="recording" data-enabled="${esc(!recording.enabled)}">${esc(recording.enabled ? 'Turn off' : 'Turn on')}</button>`}</div>
+      const [result, phonesResult] = await Promise.all([api('/diagnostics'), api('/diagnostics/phones').catch(() => ({ phones: [] }))]);
+      const recording = result.recording, phones = phonesResult?.phones || [];
+      return `<h1>Diagnostics</h1><p><a href="#/diagnostics/worklist">Explain this worklist</a> — find out why an order is missing.</p><p><a href="#/diagnostics/phones">Connected phones, crashes &amp; model telemetry</a></p><h2>Reporting phones</h2>${phonesTable(phones)}<h2>Gateway recorder</h2><div class="toolbar"><span>${esc(recording.enabled ? `Recording on at ${recording.directory}` : 'Recording off')}</span>${recording.locked_by === 'env' ? '<span class="muted">Controlled by GATEWAY_DIAGNOSTICS_DIR on this process</span>' : `<button data-action="recording" data-enabled="${esc(!recording.enabled)}">${esc(recording.enabled ? 'Turn off' : 'Turn on')}</button>`}</div>
         <table class="rows"><thead><tr><th>Segment</th><th>Status</th><th>Started</th><th class="num">Bytes</th><th class="num">Dropped</th><th></th></tr></thead><tbody>${result.segments.map(segment => `<tr><td>${segmentLink(segment.id)}</td><td>${esc(segment.active ? 'recording' : segment.status)}</td><td>${esc(date(segment.started_at))}</td><td class="num">${esc(fmtBytes(segment.bytes))}</td><td class="num">${esc(segment.dropped_events)}</td><td><button data-action="archive" data-id="${esc(segment.id)}">Download</button></td></tr>`).join('')}</tbody></table>${result.segments.length ? '' : '<p class="muted">No recorded segments.</p>'}`;
     }
     if (rest.length === 2 && rest[0] === 'segments') {
@@ -417,6 +470,7 @@
         notice = 'Config-file filters restored. Refresh the phone.';
       }
       if (action === 'archive') { await download(`/diagnostics/segments/${pathId(button.dataset.id)}/archive`); return; }
+      if (action === 'phone-archive') { await download(`/diagnostics/phones/${pathId(button.dataset.id)}/archive`); return; }
       if (action === 'dicom') { await download(`/captures/${pathId(button.dataset.id)}/dicom`); return; }
       if (action === 'recording') {
         try { await api('/diagnostics/recording', { method: 'PUT', body: JSON.stringify({ enabled: button.dataset.enabled === 'true' }) }); }

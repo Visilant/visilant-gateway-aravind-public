@@ -260,3 +260,136 @@ test('a rejected incoming row and inspection omissions remain explicit', async (
     expect(ui.incoming.innerHTML).toBe('');
     expect(ui.timeouts.size).toBe(0);
 });
+
+const phoneSummary = {
+    device_id: '11111111-2222-4333-8444-555555555555',
+    manufacturer: 'Google',
+    device_model: 'Pixel 7a <script>x</script>',
+    android_version: '14',
+    api_level: 34,
+    app_version: '2.3.0',
+    model_revision: 'eye-2026.10',
+    first_seen_at: '2026-11-10T08:00:00.000Z',
+    last_seen_at: '2026-11-11T09:30:00.000Z',
+    status: {
+        battery_level: 76,
+        charging: true,
+        battery_temperature_c: 36.4,
+        power_save: false,
+        thermal_status: 1,
+        network_kind: 'wifi',
+        wifi_connected: true,
+        seeker_connected: true,
+        seeker_generation: 3,
+        pending_uploads: 2,
+        failed_uploads: 1,
+        free_storage_bytes: 4 * 1024 * 1024 * 1024,
+    },
+    counts: {
+        events: 42,
+        crashes: 2,
+        seeker_disconnects: 3,
+        wifi_disconnects: 1,
+        captures_taken: 18,
+        assessments_ready: 5,
+        assessments_unavailable: 1,
+    },
+};
+
+const phoneDetailFixture = {
+    phone: phoneSummary,
+    crashes: [{
+        crash_id: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
+        source: 'js',
+        utc_ms: 1700000001000,
+        error_type: 'TypeError<img src=x>',
+        message: 'Cannot read property of undefined <script>alert(1)</script>',
+        stack: ['at CaptureScreen (screens/CaptureScreen.js:42:9)', 'at evil (<svg onload=alert(1)>)'],
+        route: 'Capture<b>',
+        run_id: null,
+        operation_id: null,
+        device_state: phoneSummary.status,
+        app_version: '2.3.0',
+        received_at: '2026-11-11T09:30:00.000Z',
+    }],
+    connectivity: [
+        { stream: 'events', name: 'seeker.disconnected', sequence: 10, utc_ms: 1700000000000, duration_ms: null, outcome: 'ok', run_id: null, operation_id: null, span_id: null, attributes: { seeker_reason: 'heartbeat_timeout', seeker_generation: 3 } },
+        { stream: 'events', name: 'network.restored', sequence: 11, utc_ms: 1700000005000, duration_ms: null, outcome: 'ok', run_id: null, operation_id: null, span_id: null, attributes: { network_kind: 'wifi', wifi_connected: true, offline_duration_ms: 4500 } },
+    ],
+    captures_and_models: {
+        spans: [{ name: 'phone.capture.burst.ok', count: 6, p50_ms: 48.5, p95_ms: 92, p99_ms: 92, max_ms: 92, small_sample: true }],
+        detector: { bursts_auto: 4, bursts_manual: 2, suggested_kept: 5, suggested_overridden: 1, quality_score_p50: 132.5, quality_score_p95: 188.0 },
+        assessments: {
+            ready: 5,
+            eye_not_detected: 1,
+            failed_or_timeout: 0,
+            by_task: { cornea: { normal: 4, scar: 1 }, lens: { clear: 3, immature: 2 }, pterygium: { negative: 5 } },
+            confidence_p50: { cornea: 0.92, lens: 0.84, pterygium: 0.96 },
+            entropy_p50: { cornea: 0.14, lens: 0.31, pterygium: 0.08 },
+        },
+    },
+    recent_events: [
+        { stream: 'events', name: 'capture.burst', sequence: 12, utc_ms: 1700000006000, duration_ms: 48.5, outcome: 'ok', run_id: null, operation_id: null, span_id: null, attributes: { trigger: 'auto', shot_count: 3 } },
+    ],
+    resources: [
+        { name: 'resource.sample', utc_ms: 1700000007000, battery_level: 76, battery_temperature_c: 36.4, thermal_status: 1, cpu_percent: 18.2, pss_bytes: 120 * 1024 * 1024, available_memory_bytes: 2 * 1024 * 1024 * 1024 },
+    ],
+    malformed_lines: 0,
+};
+
+test('diagnostics overview and phones list render connected phones link and summary table with escaped values', async () => {
+    const ui = page(async url => {
+        if (url === '/diagnostics') return json({ recording: { enabled: false, locked_by: null, directory: '/tmp/diag' }, segments: [] });
+        if (url === '/diagnostics/phones') return json({ phones: [phoneSummary] });
+        return json({});
+    }, '#/diagnostics');
+    await settle();
+    expect(ui.root.innerHTML).toContain('href="#/diagnostics/phones"');
+    expect(ui.root.innerHTML).toContain('Connected phones, crashes &amp; model telemetry');
+    expect(ui.root.innerHTML).toContain(`#/diagnostics/phones/${phoneSummary.device_id}`);
+    expect(ui.root.innerHTML).toContain('Pixel 7a &lt;script&gt;x&lt;/script&gt;');
+    expect(ui.root.innerHTML).not.toContain('<script>x</script>');
+
+    ui.location.hash = '#/diagnostics/phones';
+    ui.windowEvents.hashchange();
+    await settle();
+    expect(ui.root.innerHTML).toContain(`#/diagnostics/phones/${phoneSummary.device_id}`);
+    expect(ui.root.innerHTML).toContain('2.3.0');
+    expect(ui.root.innerHTML).toContain('eye-2026.10');
+});
+
+test('phone detail page renders device status, crashes, connectivity, capture & model telemetry, spans, and escapes XSS', async () => {
+    const ui = page(async url => {
+        if (url === `/diagnostics/phones/${phoneSummary.device_id}`) return json(phoneDetailFixture);
+        return json({});
+    }, `#/diagnostics/phones/${phoneSummary.device_id}`);
+    await settle();
+    const html = ui.root.innerHTML;
+    // Device status card + download zip button
+    expect(html).toContain('76%');
+    expect(html).toContain('4.0 GiB');
+    expect(html).toContain(`data-action="phone-archive" data-id="${phoneSummary.device_id}"`);
+    // Crashes section with expandable details
+    expect(html).toContain('TypeError&lt;img src=x&gt;');
+    expect(html).toContain('Cannot read property of undefined &lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).toContain('Capture&lt;b&gt;');
+    expect(html).toContain('<details');
+    expect(html).toContain('at CaptureScreen (screens/CaptureScreen.js:42:9)');
+    expect(html).toContain('&lt;svg onload=alert(1)&gt;');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<img src=x>');
+    expect(html).not.toContain('<svg onload=');
+    // Connectivity log
+    expect(html).toContain('seeker.disconnected');
+    expect(html).toContain('heartbeat_timeout');
+    expect(html).toContain('network.restored');
+    expect(html).toContain('4500');
+    // Capture & AI Model summary + spans
+    expect(html).toContain('132.5');
+    expect(html).toContain('188.0');
+    expect(html).toContain('normal: 4');
+    expect(html).toContain('scar: 1');
+    expect(html).toContain('0.92');
+    expect(html).toContain('0.14');
+    expect(html).toContain('phone.capture.burst.ok');
+});

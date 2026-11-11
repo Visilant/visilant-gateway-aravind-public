@@ -177,6 +177,10 @@ Responses that expose patient content use `Cache-Control: no-store`.
 | `GET` | `/diagnostics/segments/:id` | Manifest, span and event counts, correlated runs; damaged lines are counted and skipped. |
 | `GET` | `/diagnostics/segments/:id/archive` | Stream `<id>.zip` with the segment files. |
 | `GET` | `/diagnostics/runs/:runId` | Roll-up across contributing segments and capture references. |
+| `POST` | `/diagnostics/phones/events` | Batch-ingest phone operational events, resource samples and crash dumps (`PhoneBatchDto`). |
+| `GET` | `/diagnostics/phones` | Newest-seen-first list of reporting phones with latest hardware status and counters. |
+| `GET` | `/diagnostics/phones/:deviceId` | Per-phone detail: status snapshot, newest 50 crashes, newest 50 connectivity transitions, capture/detector/CNN model roll-ups, recent events and resource samples. |
+| `GET` | `/diagnostics/phones/:deviceId/archive` | Stream `<deviceId>.zip` with `manifest.json`, `events.jsonl`, `resources.jsonl`, and `crashes.jsonl` (plus rotated stream files). |
 | `GET` | `/system/config` | Effective config and runtime metadata; no signing secrets. |
 | `GET` | `/system/device` | Current process and storage sample plus the last 12 samples at five-second intervals. |
 
@@ -247,6 +251,19 @@ at a limit and counted explicitly; identifiers in included records are not trunc
 Successful conversions preceding a converter failure remain inspectable, with mapping
 unavailable and a failed check. Malformed JSON and binary DICOM responses are not
 included; existing conversion failure behavior and temporary-file cleanup are preserved.
+
+## Phone telemetry, crash & model diagnostics
+
+Authenticated phones push batched telemetry to `POST /diagnostics/phones/events` (`PhoneBatchDto` in `src/application/dto/phone-diagnostics.dto.ts`).
+No PHI (patient names, MRNs, birth dates, or accession numbers) is accepted, stored, logged, or returned; events correlate exclusively via UUIDs (`device_id`, `batch_id`, `run_id`, `operation_id`, `span_id`, `screening_id`, `capture_id`, `crash_id`).
+
+- **Idempotency**: The gateway stores the last 64 `batch_id` values per phone in `<diagnostics_root>/phones/<device_id>/manifest.json`. A retried batch returns `{ accepted_events: 0, accepted_crashes: 0, duplicate_batch: true }` without duplicating JSONL records or counters.
+- **Sanitization**: Event attributes pass through `safePhoneAttributes` (`src/infrastructure/diagnostics/phoneAttributes.ts`), keeping only allowlisted hardware, Seeker, Wi-Fi, capture, detector (`yolo11n`), and clinical CNN (`cornea`, `lens`, `pterygium`) keys with finite numbers, booleans, `null`, or safe token strings (`<= 64` chars). Crash messages and stack frames strip absolute/device paths down to the last two segments, strip query strings, redact anything following `patient`/`accession`/`mrn`, and drop frames containing `^` or non-ASCII characters.
+- **Roll-up event conventions**:
+  - Connectivity timeline & counters: `seeker.disconnected`, `seeker.opened`, `seeker.failsafe`, `seeker.permission_denied`, `network.change` (`wifi_connected: false` increments `wifi_disconnects`), and `network.restored`.
+  - Capture & detector summary: `capture.burst` (`trigger: 'auto' | 'manual'`, `shot_count`, `quality_score` / `quality_score_max`) and `capture.selected` (`operator_overrode_suggested: boolean`).
+  - Clinical CNN summary: `assessment.result` (`assessment_status: 'ready' | 'unavailable'`, `assessment_reason`, `eye_gate_passed`, and `<task>_label`, `<task>_confidence`, `<task>_entropy` for `cornea`, `lens`, `pterygium`).
+- **Bounded disk budget**: Each phone directory is capped at 25 MiB (streams rotate at 10 MiB keeping up to 2 rotated files), and the total across all phones is capped at 150 MiB, pruning the oldest inactive phone directories first.
 
 ## DICOM output
 

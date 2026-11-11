@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { HttpError } from 'routing-controllers';
 import { assertUuid } from '../src/presentation/validation';
 import { mapDiagnosticsError } from '../src/presentation/controllers/diagnostics.controller';
-import { InvalidDiagnosticIdError, RecordingLockedError, RecordingStartError, RunNotFoundError, SegmentNotFoundError } from '../src/application/services/DiagnosticsService';
+import { InvalidDiagnosticIdError, PhoneNotFoundError, RecordingLockedError, RecordingStartError, RunNotFoundError, SegmentNotFoundError } from '../src/application/services/DiagnosticsService';
 const id = 'ABCDEFAB-ABCD-ABCD-ABCD-ABCDEFABCDEF';
 test('UUIDs are normalized and malformed paths rejected', () => {
     expect(assertUuid(id, 'id')).toBe(id.toLowerCase()); expect(assertUuid(id.toLowerCase(), 'id')).toBe(id.toLowerCase());
@@ -10,7 +10,7 @@ test('UUIDs are normalized and malformed paths rejected', () => {
 });
 test.each([
     [new RecordingLockedError(), 409], [new InvalidDiagnosticIdError('id'), 400],
-    [new SegmentNotFoundError(id), 404], [new RunNotFoundError(id), 404], [new RecordingStartError(), 500],
+    [new SegmentNotFoundError(id), 404], [new RunNotFoundError(id), 404], [new PhoneNotFoundError(id), 404], [new RecordingStartError(), 500],
 ])('maps %s to %i', (error, status) => expect((mapDiagnosticsError(error) as HttpError).httpCode).toBe(status));
 test('leaves other errors unchanged', () => { const error = new Error('other'); expect(mapDiagnosticsError(error)).toBe(error); });
 

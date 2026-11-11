@@ -92,3 +92,108 @@ export function runsSeen(events: SummaryEvent[]): string[] {
     for (const event of events) if (typeof event.run_id === 'string' && event.run_id) ids.add(event.run_id);
     return [...ids];
 }
+
+export interface DetectorSummary {
+    bursts_auto: number;
+    bursts_manual: number;
+    suggested_kept: number;
+    suggested_overridden: number;
+    quality_score_p50: number | null;
+    quality_score_p95: number | null;
+}
+
+export type AssessmentTask = 'cornea' | 'lens' | 'pterygium';
+export const ASSESSMENT_TASKS: readonly AssessmentTask[] = ['cornea', 'lens', 'pterygium'];
+
+export interface AssessmentSummary {
+    ready: number;
+    eye_not_detected: number;
+    failed_or_timeout: number;
+    by_task: Record<AssessmentTask, Record<string, number>>;
+    confidence_p50: Record<AssessmentTask, number | null>;
+    entropy_p50: Record<AssessmentTask, number | null>;
+}
+
+const CONNECTIVITY_EVENTS: ReadonlySet<string> = new Set([
+    'seeker.disconnected', 'seeker.opened', 'seeker.failsafe', 'seeker.permission_denied', 'network.change', 'network.restored',
+]);
+
+export function isConnectivityEvent(event: SummaryEvent): boolean {
+    return CONNECTIVITY_EVENTS.has(event.name);
+}
+
+function finiteOrNull(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function quantileOrNull(values: number[], q: number): number | null {
+    const v = quantile(values, q);
+    return Number.isFinite(v) ? v : null;
+}
+
+export function detectorSummary(events: SummaryEvent[]): DetectorSummary {
+    let bursts_auto = 0, bursts_manual = 0, suggested_kept = 0, suggested_overridden = 0;
+    const scores: number[] = [];
+    for (const event of events) {
+        const a = event.attributes ?? {};
+        if (event.name === 'capture.burst') {
+            if (a.trigger === 'auto') bursts_auto++;
+            else if (a.trigger === 'manual') bursts_manual++;
+            const score = finiteOrNull(a.quality_score) ?? finiteOrNull(a.quality_score_max);
+            if (score !== null) scores.push(score);
+        } else if (event.name === 'capture.selected') {
+            if (a.operator_overrode_suggested === true) suggested_overridden++;
+            else if (a.operator_overrode_suggested === false) suggested_kept++;
+        }
+    }
+    return {
+        bursts_auto,
+        bursts_manual,
+        suggested_kept,
+        suggested_overridden,
+        quality_score_p50: quantileOrNull(scores, 0.5),
+        quality_score_p95: quantileOrNull(scores, 0.95),
+    };
+}
+
+export function assessmentSummary(events: SummaryEvent[]): AssessmentSummary {
+    let ready = 0, eye_not_detected = 0, failed_or_timeout = 0;
+    const by_task: Record<AssessmentTask, Record<string, number>> = { cornea: {}, lens: {}, pterygium: {} };
+    const confidences: Record<AssessmentTask, number[]> = { cornea: [], lens: [], pterygium: [] };
+    const entropies: Record<AssessmentTask, number[]> = { cornea: [], lens: [], pterygium: [] };
+    for (const event of events) {
+        if (event.name !== 'assessment.result') continue;
+        const a = event.attributes ?? {};
+        if (a.assessment_status === 'ready') {
+            ready++;
+            for (const task of ASSESSMENT_TASKS) {
+                const label = a[`${task}_label`];
+                if (typeof label === 'string' && label) by_task[task][label] = (by_task[task][label] ?? 0) + 1;
+                const conf = finiteOrNull(a[`${task}_confidence`]);
+                if (conf !== null) confidences[task].push(conf);
+                const ent = finiteOrNull(a[`${task}_entropy`]);
+                if (ent !== null) entropies[task].push(ent);
+            }
+        } else if (a.assessment_status === 'unavailable') {
+            if (a.assessment_reason === 'eye_not_detected' || a.eye_gate_passed === false) eye_not_detected++;
+            else failed_or_timeout++;
+        }
+    }
+    return {
+        ready,
+        eye_not_detected,
+        failed_or_timeout,
+        by_task,
+        confidence_p50: {
+            cornea: quantileOrNull(confidences.cornea, 0.5),
+            lens: quantileOrNull(confidences.lens, 0.5),
+            pterygium: quantileOrNull(confidences.pterygium, 0.5),
+        },
+        entropy_p50: {
+            cornea: quantileOrNull(entropies.cornea, 0.5),
+            lens: quantileOrNull(entropies.lens, 0.5),
+            pterygium: quantileOrNull(entropies.pterygium, 0.5),
+        },
+    };
+}
+

@@ -1,14 +1,14 @@
 import type { Response } from 'express';
-import { Authorized, BadRequestError, Body, Get, HttpError, InternalServerError, JsonController, NotFoundError, Param, Put, Res } from 'routing-controllers';
+import { Authorized, BadRequestError, Body, Get, HttpError, InternalServerError, JsonController, NotFoundError, Param, Post, Put, Res } from 'routing-controllers';
 import { Service } from 'typedi';
-import { RecordingDto } from '../../application/dto';
-import { DiagnosticsService, InvalidDiagnosticIdError, RecordingLockedError, RecordingStartError, RunNotFoundError, SegmentNotFoundError } from '../../application/services/DiagnosticsService';
+import { PhoneBatchDto, RecordingDto } from '../../application/dto';
+import { DiagnosticsService, InvalidDiagnosticIdError, PhoneNotFoundError, RecordingLockedError, RecordingStartError, RunNotFoundError, SegmentNotFoundError } from '../../application/services/DiagnosticsService';
 import { assertUuid } from '../validation';
 
 export function mapDiagnosticsError(err: unknown): unknown {
     if (err instanceof RecordingLockedError) return new HttpError(409, err.message);
     if (err instanceof InvalidDiagnosticIdError) return new BadRequestError(err.message);
-    if (err instanceof SegmentNotFoundError || err instanceof RunNotFoundError) return new NotFoundError(err.message);
+    if (err instanceof SegmentNotFoundError || err instanceof RunNotFoundError || err instanceof PhoneNotFoundError) return new NotFoundError(err.message);
     if (err instanceof RecordingStartError) return new InternalServerError(err.message);
     return err;
 }
@@ -29,13 +29,33 @@ export class DiagnosticsController {
     async archive(@Param('id') id: string, @Res() res: Response) {
         try {
             const archive = await this.service.archive(assertUuid(id, 'segment id'));
-            archive.stream.on('error', () => {
-                if (!res.headersSent) res.status(500).json({ error: 'archive failed' }); else res.destroy();
-            });
-            res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${archive.id}.zip"`, 'Cache-Control': 'no-store' });
-            res.flushHeaders();
-            archive.stream.pipe(res);
-            return res;
+            return this.streamZip(archive, res);
         } catch (err) { throw mapDiagnosticsError(err); }
+    }
+    @Post('/phones/events')
+    async ingestPhoneEvents(@Body() body: PhoneBatchDto) {
+        try { return await this.service.ingest(body); } catch (err) { throw mapDiagnosticsError(err); }
+    }
+    @Get('/phones')
+    async phones() { try { return await this.service.listPhones(); } catch (err) { throw mapDiagnosticsError(err); } }
+    @Get('/phones/:deviceId')
+    async phone(@Param('deviceId') deviceId: string) {
+        try { return await this.service.phoneDetail(assertUuid(deviceId, 'device id')); } catch (err) { throw mapDiagnosticsError(err); }
+    }
+    @Get('/phones/:deviceId/archive')
+    async phoneArchive(@Param('deviceId') deviceId: string, @Res() res: Response) {
+        try {
+            const archive = await this.service.phoneArchive(assertUuid(deviceId, 'device id'));
+            return this.streamZip(archive, res);
+        } catch (err) { throw mapDiagnosticsError(err); }
+    }
+    private streamZip(archive: { id: string; stream: NodeJS.ReadableStream }, res: Response): Response {
+        archive.stream.on('error', () => {
+            if (!res.headersSent) res.status(500).json({ error: 'archive failed' }); else res.destroy();
+        });
+        res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${archive.id}.zip"`, 'Cache-Control': 'no-store' });
+        res.flushHeaders();
+        archive.stream.pipe(res);
+        return res;
     }
 }
