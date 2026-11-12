@@ -1,6 +1,6 @@
 import { DataSource } from 'typeorm';
 import { GatewayConfig, TelemetryConfig } from '../src/config';
-import { TelemetryService } from '../src/application/services/TelemetryService';
+import { TelemetryService, TelemetrySignInRequiredError } from '../src/application/services/TelemetryService';
 import type { TelemetryEventDto } from '../src/application/dto';
 import { SettingRepository, TelemetryRepository } from '../src/infrastructure/database/repositories';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
@@ -20,21 +20,21 @@ beforeEach(async () => {
 afterEach(() => database.destroy());
 
 test('pushes right away once the unsent backlog reaches a full batch of 500', async () => {
-    for (let i = 0; i < 4; i++) await service.ingest(health(100));
+    for (let i = 0; i < 4; i++) await service.ingest(health(100), true);
     await service.record('gateway.heartbeat', {});
     expect(push.kick).not.toHaveBeenCalled();
-    await service.ingest(health(99));
+    await service.ingest(health(99), true);
     expect(push.kick).toHaveBeenCalledTimes(1);
 });
 
 test('a batch of only duplicates does not trigger a push', async () => {
     const events = health(100);
-    for (let i = 0; i < 5; i++) await service.ingest(health(100));
+    for (let i = 0; i < 5; i++) await service.ingest(health(100), true);
     push.kick.mockClear();
-    await service.ingest(events);
+    await service.ingest(events, true);
     expect(push.kick).toHaveBeenCalledTimes(1);
     push.kick.mockClear();
-    await service.ingest(events);
+    await service.ingest(events, true);
     expect(push.kick).not.toHaveBeenCalled();
 });
 
@@ -48,4 +48,11 @@ test('record does nothing while telemetry is off', async () => {
     config.telemetry.enabled = false;
     expect(await service.record('gateway.heartbeat', {})).toBeNull();
     expect(await new TelemetryRepository(database).countUnsent()).toBe(0);
+});
+
+test('without sign-in, a batch with a capture type is refused whole and stores nothing', async () => {
+    const batch = [phoneEvent('device.health'), phoneEvent('yolo.autocapture')] as unknown as TelemetryEventDto[];
+    await expect(service.ingest(batch, false)).rejects.toEqual(new TelemetrySignInRequiredError('yolo.autocapture'));
+    expect(await new TelemetryRepository(database).countUnsent()).toBe(0);
+    expect((await service.ingest([batch[0]], false)).accepted).toHaveLength(1);
 });

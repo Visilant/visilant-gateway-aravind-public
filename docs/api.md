@@ -160,7 +160,7 @@ pushes them to central. Event types, fields and the push are in
 
 | Method | Path | Input / result |
 | --- | --- | --- |
-| `POST` | `/telemetry/events` | Signed in. JSON `{ "events": [ <event>, ... ] }`, 1 to 100 events and at most 256 KB; over either is 413. Returns `{ "data": { "accepted": [...], "duplicate": [...], "dropped": [...] } }`, each a list of `event_id`. With telemetry off: 204, no body, nothing stored. |
+| `POST` | `/telemetry/events` | Token optional; see below. JSON `{ "events": [ <event>, ... ] }`, 1 to 100 events and at most 256 KB; over either is 413. Returns `{ "data": { "accepted": [...], "duplicate": [...], "dropped": [...] } }`, each a list of `event_id`. With telemetry off: 204, no body, nothing stored. |
 | `GET` | `/telemetry/export` | ADMIN. Optional `since=<event_id>`. NDJSON (`application/x-ndjson`) of the unsent rows after `since`, one envelope per line. |
 
 Each event is `{ event_id, schema_version, type, occurred_at, device_id, session_id,
@@ -173,6 +173,11 @@ phone. The gateway adds `received_at`, `site_id` and `gateway_id`.
 - 400 means the whole request was rejected and nothing from it was stored. `details`
   names the failing fields and never repeats their values. Unknown types, unknown keys,
   and the gateway's own types (`gateway.*`, `ai.assessed`) are rejected.
+- Without a valid token (none, expired or invalid), only `app.started`, `app.crashed`,
+  `operation.failed`, `device.health` and `gateway.unreachable` are accepted. Any other
+  type refuses the whole request with 401, so sign in and send it again. Unsigned
+  requests are limited to 30 a minute per client IP; beyond that the answer is 429 with
+  `Retry-After`. Each stored row records `authenticated` true or false.
 - A gateway older than this answers 404. The app treats 404 as "telemetry not supported"
   and stops sending for that session.
 

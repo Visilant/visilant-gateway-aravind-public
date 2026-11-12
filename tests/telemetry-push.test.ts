@@ -20,7 +20,7 @@ function row(overrides: Partial<TelemetryEventEntity> = {}): TelemetryEventEntit
     return Object.assign(new TelemetryEventEntity(), {
         event_id: uuidv7(), schema_version: 1, type: 'device.health', occurred_at: now, received_at: now, site_id: 'VC1',
         gateway_id: '0b8a9c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d', device_id: '7d0c3f0e-1b7a-4c8e-9a51-2f3b4c5d6e7f', session_id: null,
-        capture_id: null, screening_id: null, payload: '{"battery_pct":50}', sent_at: null, ...overrides,
+        capture_id: null, screening_id: null, authenticated: true, payload: '{"battery_pct":50}', sent_at: null, ...overrides,
     });
 }
 async function seed(count: number): Promise<TelemetryEventEntity[]> {

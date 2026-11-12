@@ -49,6 +49,11 @@ export class TelemetryEventEntity {
     @Column({ type: 'text', nullable: true })
     screening_id!: string | null;
 
+    // Whether the phone's request was signed in. A phone may send a few types before
+    // sign-in, so central can tell those rows apart. Null for the gateway's own events.
+    @Column({ type: 'boolean', nullable: true })
+    authenticated!: boolean | null;
+
     // The type-specific fields as JSON text.
     @Column({ type: 'text' })
     payload!: string;

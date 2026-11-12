@@ -84,7 +84,7 @@ test('while full, ingest drops device.health but keeps crash, capture and other 
     await outbox.prune();
     const telemetry = new TelemetryService(config, logger as never, repository, new SettingRepository(database), { kick: jest.fn() } as never, outbox);
     const health = phoneEvent('device.health'), crash = phoneEvent('app.crashed'), taken = phoneEvent('capture.taken');
-    const result = await telemetry.ingest([health, crash, taken] as unknown as TelemetryEventDto[]);
+    const result = await telemetry.ingest([health, crash, taken] as unknown as TelemetryEventDto[], true);
     expect(result).toEqual({ accepted: [crash.event_id, taken.event_id], duplicate: [], dropped: [health.event_id] });
     expect(await ids()).not.toContain(health.event_id);
 });

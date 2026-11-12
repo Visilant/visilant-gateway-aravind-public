@@ -4,7 +4,7 @@ import { DATABASE } from '../../../tokens';
 import { TelemetryEventEntity } from '../entities';
 
 const COLUMNS = ['event_id', 'schema_version', 'type', 'occurred_at', 'received_at', 'site_id', 'gateway_id',
-    'device_id', 'session_id', 'capture_id', 'screening_id', 'payload', 'sent_at'] as const;
+    'device_id', 'session_id', 'capture_id', 'screening_id', 'authenticated', 'payload', 'sent_at'] as const;
 const LIFECYCLE = ['gateway.started', 'gateway.heartbeat', 'gateway.stopped'];
 
 // Approximate bytes a row takes: its text plus a fixed allowance for the row header and
@@ -32,7 +32,9 @@ export class TelemetryRepository {
         return this.database.transaction(async (manager) => {
             const inserted: boolean[] = [];
             for (const row of rows) {
-                const result = await manager.queryRunner!.query(sql, COLUMNS.map(c => row[c] ?? null), true) as { affected?: number };
+                // SQLite has no boolean: TypeORM stores the column as 1 or 0.
+                const values = COLUMNS.map((c) => typeof row[c] === 'boolean' ? (row[c] ? 1 : 0) : row[c] ?? null);
+                const result = await manager.queryRunner!.query(sql, values, true) as { affected?: number };
                 inserted.push((result.affected ?? 0) > 0);
             }
             return inserted;

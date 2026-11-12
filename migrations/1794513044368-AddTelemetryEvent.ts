@@ -1,10 +1,10 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class AddTelemetryEvent1794511194852 implements MigrationInterface {
-    name = 'AddTelemetryEvent1794511194852'
+export class AddTelemetryEvent1794513044368 implements MigrationInterface {
+    name = 'AddTelemetryEvent1794513044368'
 
     public async up(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`CREATE TABLE "telemetry_event" ("event_id" text PRIMARY KEY NOT NULL, "schema_version" integer NOT NULL, "type" text NOT NULL, "occurred_at" text NOT NULL, "received_at" text NOT NULL, "site_id" text NOT NULL, "gateway_id" text NOT NULL, "device_id" text, "session_id" text, "capture_id" text, "screening_id" text, "payload" text NOT NULL, "sent_at" text)`);
+        await queryRunner.query(`CREATE TABLE "telemetry_event" ("event_id" text PRIMARY KEY NOT NULL, "schema_version" integer NOT NULL, "type" text NOT NULL, "occurred_at" text NOT NULL, "received_at" text NOT NULL, "site_id" text NOT NULL, "gateway_id" text NOT NULL, "device_id" text, "session_id" text, "capture_id" text, "screening_id" text, "authenticated" boolean, "payload" text NOT NULL, "sent_at" text)`);
         await queryRunner.query(`CREATE INDEX "idx_telemetry_occurred" ON "telemetry_event" ("occurred_at") `);
         await queryRunner.query(`CREATE INDEX "idx_telemetry_push" ON "telemetry_event" ("sent_at", "event_id") `);
     }

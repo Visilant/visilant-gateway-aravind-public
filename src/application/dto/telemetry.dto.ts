@@ -13,12 +13,20 @@ import { LIGHT_MODES } from './capture.dto';
 
 export const MAX_EVENTS_PER_REQUEST = 100;
 export const MAX_BODY_BYTES = 256 * 1024;
+// Requests without a valid token, per client IP.
+export const ANONYMOUS_REQUESTS_PER_MINUTE = 30;
 
 export const PHONE_EVENT_TYPES = [
     'app.started', 'app.crashed', 'operation.failed', 'capture.taken', 'capture.uploaded', 'capture.upload_failed',
     'yolo.autocapture', 'device.health', 'gateway.unreachable',
 ] as const;
 export type PhoneEventType = typeof PHONE_EVENT_TYPES[number];
+
+// What a phone can emit before anyone signs in. Every other phone type needs a
+// signed-in request.
+export const PRE_SIGN_IN_EVENT_TYPES: readonly PhoneEventType[] = [
+    'app.started', 'app.crashed', 'operation.failed', 'device.health', 'gateway.unreachable',
+];
 
 // Written by the gateway itself, never accepted from a phone.
 export const GATEWAY_EVENT_TYPES = [

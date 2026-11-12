@@ -8,9 +8,16 @@ import { CONFIG, LOGGER } from '../../tokens';
 import { TelemetryOutbox } from './TelemetryOutbox';
 import { toEnvelope } from './telemetryEnvelope';
 import { PUSH_BATCH_SIZE, TelemetryPushWorker } from './TelemetryPushWorker';
-import type { GatewayEventType, TelemetryEventDto, TelemetryIngestResultDto } from '../dto';
+import { PRE_SIGN_IN_EVENT_TYPES, type GatewayEventType, type TelemetryEventDto, type TelemetryIngestResultDto } from '../dto';
 
 const GATEWAY_ID_KEY = 'telemetry.gateway_id';
+
+// A batch without a valid token carried a type that needs a signed-in phone.
+export class TelemetrySignInRequiredError extends Error {
+    constructor(readonly eventType: string) {
+        super(`${eventType} needs a signed-in phone; sign in, then send it again`);
+    }
+}
 const EXPORT_PAGE = 500;
 
 // Writes telemetry into the SQLite outbox: phone events from POST /telemetry/events and
@@ -47,7 +54,13 @@ export class TelemetryService {
         return value;
     }
 
-    async ingest(events: TelemetryEventDto[]): Promise<TelemetryIngestResultDto> {
+    // `authenticated`: whether the request carried a valid token. Without one, only the
+    // pre-sign-in types are taken, and the whole batch is refused otherwise.
+    async ingest(events: TelemetryEventDto[], authenticated: boolean): Promise<TelemetryIngestResultDto> {
+        if (!authenticated) {
+            const needsSignIn = events.find((event) => !PRE_SIGN_IN_EVENT_TYPES.includes(event.type));
+            if (needsSignIn) throw new TelemetrySignInRequiredError(needsSignIn.type);
+        }
         const gatewayId = await this.gatewayId();
         const receivedAt = new Date().toISOString();
         const result: TelemetryIngestResultDto = { accepted: [], duplicate: [], dropped: [] };
@@ -69,6 +82,7 @@ export class TelemetryService {
             session_id: event.session_id,
             capture_id: event.capture_id ?? null,
             screening_id: event.screening_id ?? null,
+            authenticated,
             payload: JSON.stringify(event.payload),
             sent_at: null,
         }));
@@ -105,6 +119,7 @@ export class TelemetryService {
             session_id: null,
             capture_id: ids.capture_id ?? null,
             screening_id: ids.screening_id ?? null,
+            authenticated: null,
             payload: JSON.stringify(payload),
             sent_at: null,
         });

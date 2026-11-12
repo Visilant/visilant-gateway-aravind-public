@@ -1,30 +1,48 @@
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { once } from 'events';
 import type { ValidationError } from 'class-validator';
-import { Authorized, Body, Get, JsonController, OnUndefined, Post, QueryParams, Res } from 'routing-controllers';
+import { Authorized, Body, CurrentUser, Get, HttpError, JsonController, OnUndefined, Post, QueryParams, Req, Res, UnauthorizedError } from 'routing-controllers';
 import { Inject, Service } from 'typedi';
-import { PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
-import { TelemetryService } from '../../application/services';
-import { UserRole } from '../../infrastructure/database';
+import { ANONYMOUS_REQUESTS_PER_MINUTE, PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
+import { TelemetryService, TelemetrySignInRequiredError } from '../../application/services';
+import { UserEntity, UserRole } from '../../infrastructure/database';
 import type { Logger } from '../../infrastructure/logger';
 import { LOGGER } from '../../tokens';
+import { FixedWindowLimiter } from '../rate-limiter';
 import { validateDto } from '../validation';
 
 @JsonController('/telemetry')
 @Service()
 export class TelemetryController {
+    // The route takes some types without a token, so anyone on the LAN can write to it.
+    private readonly anonymousLimit = new FixedWindowLimiter(ANONYMOUS_REQUESTS_PER_MINUTE, 60_000);
+
     constructor(
         private readonly telemetry: TelemetryService,
         @Inject(LOGGER) private readonly logger: Logger,
     ) {}
 
     // Size limits (100 events, 256 KB) are applied before this, in server.ts.
+    // A token is optional: without one (or with an expired one) only the pre-sign-in
+    // types are taken, and requests are limited per client IP.
     @Post('/events')
-    @Authorized()
     @OnUndefined(204)
-    async events(@Body({ validate: false }) body: unknown): Promise<TelemetryIngestResultDto | undefined> {
+    async events(
+        @Body({ validate: false }) body: unknown,
+        @CurrentUser({ required: false }) user: UserEntity | undefined,
+        @Req() req: Request,
+        @Res() res: Response,
+    ): Promise<TelemetryIngestResultDto | undefined> {
         // Off: answer, store nothing, and do not spend effort validating what is dropped.
         if (!this.telemetry.enabled) return undefined;
+        const authenticated = !!user;
+        if (!authenticated) {
+            const taken = this.anonymousLimit.take(req.socket.remoteAddress ?? 'unknown');
+            if (!taken.allowed) {
+                res.setHeader('Retry-After', String(taken.retryAfterSeconds));
+                throw new HttpError(429, `more than ${ANONYMOUS_REQUESTS_PER_MINUTE} telemetry requests a minute without sign-in; wait, or sign in`);
+            }
+        }
         let batch: TelemetryBatchDto;
         try {
             batch = validateDto(TelemetryBatchDto, body);
@@ -32,7 +50,12 @@ export class TelemetryController {
             this.logger.warn(`telemetry rejected: ${describeRejection(body, (err as { errors?: ValidationError[] }).errors ?? [])}`);
             throw err;
         }
-        return this.telemetry.ingest(batch.events);
+        try {
+            return await this.telemetry.ingest(batch.events, authenticated);
+        } catch (err) {
+            if (err instanceof TelemetrySignInRequiredError) throw new UnauthorizedError(err.message);
+            throw err;
+        }
     }
 
     // NDJSON of the unsent rows, for a site that stays offline. See docs/telemetry.md.

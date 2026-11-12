@@ -42,9 +42,64 @@ beforeEach(async () => {
 });
 afterEach(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await database.destroy(); Container.reset(); rmSync(directory, { recursive: true, force: true }); });
 
-test('needs a signed-in phone', async () => {
-    expect((await post({ events: [phoneEvent('device.health')] }, null)).status).toBe(401);
-    expect(await rows()).toEqual([]);
+describe('before sign-in', () => {
+    const PRE_SIGN_IN = ['app.started', 'app.crashed', 'operation.failed', 'device.health', 'gateway.unreachable'];
+    const SIGNED_IN_ONLY = ['capture.taken', 'capture.uploaded', 'capture.upload_failed', 'yolo.autocapture'];
+
+    test('accepts the pre-sign-in types without a token and marks the rows unauthenticated', async () => {
+        const events = PRE_SIGN_IN.map(type => phoneEvent(type));
+        const response = await post({ events }, null);
+        expect(response.status).toBe(200);
+        expect(response.json.data.accepted).toEqual(events.map(e => e.event_id));
+        expect((await rows()).map(r => r.authenticated)).toEqual(PRE_SIGN_IN.map(() => false));
+    });
+
+    test('a signed-in phone marks its rows authenticated', async () => {
+        await post({ events: [phoneEvent('device.health')] });
+        expect((await rows())[0].authenticated).toBe(true);
+    });
+
+    test('an invalid or expired token is treated as no token', async () => {
+        expect((await post({ events: [phoneEvent('device.health')] }, 'EXPIRED')).status).toBe(200);
+        expect((await rows())[0].authenticated).toBe(false);
+        expect((await post({ events: [phoneEvent('capture.taken')] }, 'EXPIRED')).status).toBe(401);
+    });
+
+    test.each(SIGNED_IN_ONLY)('%s still needs a signed-in phone, and the whole batch is refused', async (type) => {
+        const response = await post({ events: [phoneEvent('device.health'), phoneEvent(type)] }, null);
+        expect(response.status).toBe(401);
+        expect(response.json.error).toMatch(new RegExp(`${type.replace('.', '\\.')}.*sign`));
+        expect(await rows()).toEqual([]);
+    });
+
+    test('a signed-in phone may still send every type', async () => {
+        const response = await post({ events: Object.keys(PAYLOADS).map(type => phoneEvent(type)) });
+        expect(response.status).toBe(200);
+    });
+
+    test('without a token: 30 requests a minute per client, then 429 with Retry-After', async () => {
+        let now = Date.parse('2026-11-12T00:00:00.000Z');
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+        try {
+            for (let i = 0; i < 30; i++) expect((await post({ events: [phoneEvent('device.health')] }, null)).status).toBe(200);
+            const limited = await fetch(base + '/telemetry/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: [phoneEvent('device.health')] }) });
+            expect(limited.status).toBe(429);
+            expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
+            expect((await limited.json() as any).error).toMatch(/sign in|minute/);
+            // Invalid requests count too, so the limit cannot be dodged with bad bodies.
+            expect((await post({ events: [] }, null)).status).toBe(429);
+            // A signed-in phone is not limited by its neighbours.
+            expect((await post({ events: [phoneEvent('device.health')] })).status).toBe(200);
+            now += 60_000;
+            expect((await post({ events: [phoneEvent('device.health')] }, null)).status).toBe(200);
+            expect(await rows()).toHaveLength(32);
+        } finally { jest.restoreAllMocks(); }
+    });
+
+    test('telemetry off: 204 without a token as well, and nothing counts against the limit', async () => {
+        config.telemetry.enabled = false;
+        for (let i = 0; i < 35; i++) expect((await post({ events: [phoneEvent('device.health')] }, null)).status).toBe(204);
+    });
 });
 
 test('accepts one valid event of every phone type and stores the envelope with site, gateway and receipt time', async () => {
@@ -59,7 +114,7 @@ test('accepts one valid event of every phone type and stores the envelope with s
     expect(gatewayId).toMatch(/^[0-9a-f-]{36}$/);
     for (const event of events) {
         const row = stored.find(r => r.event_id === event.event_id)!;
-        expect(row).toMatchObject({ type: event.type, schema_version: 1, occurred_at: event.occurred_at, site_id: 'VC-SYNTH-01', gateway_id: gatewayId, device_id: DEVICE_ID, session_id: SESSION_ID, capture_id: event.capture_id ?? null, screening_id: event.screening_id ?? null, sent_at: null });
+        expect(row).toMatchObject({ type: event.type, schema_version: 1, occurred_at: event.occurred_at, site_id: 'VC-SYNTH-01', gateway_id: gatewayId, device_id: DEVICE_ID, session_id: SESSION_ID, capture_id: event.capture_id ?? null, screening_id: event.screening_id ?? null, sent_at: null, authenticated: true });
         expect(row.received_at >= before).toBe(true);
         expect(JSON.parse(row.payload)).toEqual(event.payload);
     }
@@ -108,6 +163,7 @@ describe('rejections', () => {
         ['a gateway-only type sent by a phone', phoneEvent('device.health', { type: 'gateway.heartbeat' })],
         ['ai.assessed sent by a phone', phoneEvent('device.health', { type: 'ai.assessed' })],
         ['an unknown envelope key', phoneEvent('device.health', { patient_name: 'x' })],
+        ['authenticated set by the phone', phoneEvent('device.health', { authenticated: true })],
         ['an unknown payload key', phoneEvent('device.health', { payload: { ...PAYLOADS['device.health'].payload, note: 'x' } })],
         ['an event_id that is not a lowercase UUIDv7', phoneEvent('device.health', { event_id: '3a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d' })],
         ['an upper-case event_id', phoneEvent('device.health', { event_id: (phoneEvent('device.health').event_id as string).toUpperCase() })],
@@ -166,7 +222,7 @@ test('POST /captures with an AI assessment writes ai.assessed, without the workl
     const response = await fetch(base + '/captures', { method: 'POST', headers: { Authorization: 'Bearer OPERATOR', 'Idempotency-Key': 'phone-capture-1' }, body: form });
     expect(response.status).toBe(200);
     const [row] = await rows();
-    expect(row).toMatchObject({ type: 'ai.assessed', capture_id: 'phone-capture-1', device_id: null, site_id: 'VC-SYNTH-01' });
+    expect(row).toMatchObject({ type: 'ai.assessed', capture_id: 'phone-capture-1', device_id: null, site_id: 'VC-SYNTH-01', authenticated: null });
     expect(JSON.parse(row.payload)).toEqual({ gateway_capture_id: (await response.json() as any).data.id, laterality: 'L', light: 'WHITE', assessment });
     expect(JSON.stringify(row)).not.toMatch(/SYNTH-ACC|SYNTH-MRN|PATIENT/);
 });

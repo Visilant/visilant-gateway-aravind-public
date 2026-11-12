@@ -57,27 +57,47 @@ gateway sets), in SQLite, in the push to central and in the export.
 | `session_id` | UUID or null | Phone | One app launch. Null for gateway events. |
 | `capture_id` | string or null | Producer | The phone's capture ID (its `Idempotency-Key`). Joins to the image at the site. |
 | `screening_id` | string or null | Producer | Joins to the screening at the site. |
+| `authenticated` | boolean or null | Gateway | `true` when the phone's request carried a valid token, `false` when it did not. Null for the gateway's own events. |
 | `payload` | object | Producer | The type's own fields. Stored as JSON text. |
 
 The SQLite table `telemetry_event` also has `sent_at`, set when central confirms the row.
 It never leaves the gateway.
+
+## Before sign-in
+
+A phone may send telemetry without a token, so a crash or a health sample on the
+sign-in screen is not lost. Because anyone on the centre's network can then write to
+the route, an unsigned request is limited:
+
+- Only `app.started`, `app.crashed`, `operation.failed`, `device.health` and
+  `gateway.unreachable` are taken. A batch with any other type is refused whole with 401
+  (`<type> needs a signed-in phone`), and nothing from it is stored.
+- At most 30 requests a minute per client IP. Beyond that the answer is 429 with
+  `Retry-After`. Rejected and invalid requests count too. The count is in memory and a
+  restart clears it.
+- Each row is stored with `authenticated: false`, so central can tell these rows apart
+  and weigh them accordingly.
+
+An expired or invalid token is treated as no token. A signed-in request may send every
+phone type and is not rate-limited.
 
 ## Event types
 
 ### Sent by the phone
 
 `device_id` and `session_id` are required. `capture_id` is required on the three
-`capture.*` types.
+`capture.*` types. The types marked *sign-in* need a signed-in request; the rest may be
+sent [before sign-in](#before-sign-in).
 
 | Type | When | Payload |
 | --- | --- | --- |
 | `app.started` | App launch | `app_version`, `android_version`, `device_model`; optional `android_sdk`, `ai_model_revision`, `ai_model_manifest_sha256`, `yolo_model_revision` |
 | `app.crashed` | At the crash, best effort (`source: "uncaught_handler"`), or at the next launch from Android's `ApplicationExitInfo` (`source: "exit_info"`) | `source`, `app_version`; optional `error_code`, `exception_class`, `exit_reason`, `crashed_session_id`, `stack_frames` (up to 64 of `{ class, method, file, line }`, `file` a `.kt` or `.java` source) |
 | `operation.failed` | A handled error the operator sees | `operation`, `error_code` |
-| `capture.taken` | Photo accepted for upload | `light` (`WHITE`, `BLUE`, `SLIT`), `eye` (`L`, `R`), `mode` (`autocapture`, `manual`) |
-| `capture.uploaded` | Upload finished | `duration_ms`, `bytes`, `http_status` |
-| `capture.upload_failed` | Upload gave up | `duration_ms`; optional `bytes`, `http_status`, `error_code` |
-| `yolo.autocapture` | An autocapture attempt ends | `outcome` (`fired`, `timed_out`, `cancelled`), `frames_evaluated`, `rejected_frames` (counts by `no_eye`, `clipped`, `too_close`, `too_far`, `off_centre`, `no_iris`, `gaze_off`, `hold_broken`), `yolo_model_revision`; optional `time_to_trigger_ms`, `winning_box` (`x`, `y`, `width`, `height`, each 0 to 1 of the frame), `winning_score` (0 to 1), `operator_decision` (`kept`, `retook`) |
+| `capture.taken` (*sign-in*) | Photo accepted for upload | `light` (`WHITE`, `BLUE`, `SLIT`), `eye` (`L`, `R`), `mode` (`autocapture`, `manual`) |
+| `capture.uploaded` (*sign-in*) | Upload finished | `duration_ms`, `bytes`, `http_status` |
+| `capture.upload_failed` (*sign-in*) | Upload gave up | `duration_ms`; optional `bytes`, `http_status`, `error_code` |
+| `yolo.autocapture` (*sign-in*) | An autocapture attempt ends | `outcome` (`fired`, `timed_out`, `cancelled`), `frames_evaluated`, `rejected_frames` (counts by `no_eye`, `clipped`, `too_close`, `too_far`, `off_centre`, `no_iris`, `gaze_off`, `hold_broken`), `yolo_model_revision`; optional `time_to_trigger_ms`, `winning_box` (`x`, `y`, `width`, `height`, each 0 to 1 of the frame), `winning_score` (0 to 1), `operator_decision` (`kept`, `retook`) |
 | `device.health` | Every 5 min while the app is in front | `battery_pct`, `charging`, `free_storage_bytes`, `network_kind` (`wifi`, `cellular`, `ethernet`, `none`, `other`), `seeker_connected`; optional `battery_temp_c`, `thermal_status` (Android thermal status, lowercase), `wifi_rssi_dbm` |
 | `gateway.unreachable` | First successful send after an outage | `from`, `to` (ISO 8601 UTC), `dropped` (counts by phone event type) |
 
@@ -175,6 +195,7 @@ patient's `.dcm` at the site, on purpose. Patient identity never enters a record
 | `src/application/dto/telemetry.dto.ts` | Envelope and payload rules per type, limits |
 | `src/presentation/controllers/telemetry.controller.ts` | `POST /telemetry/events`, `GET /telemetry/export` |
 | `src/presentation/telemetry-limits.ts` | 256 KB and 100-event limits (413) |
+| `src/presentation/rate-limiter.ts` | Per-IP limit for requests without a token (429) |
 | `src/application/services/TelemetryService.ts` | Writes phone and gateway events, `gateway_id`, export |
 | `src/application/services/TelemetryLifecycle.ts` | Started, heartbeat, stopped, unclean shutdown |
 | `src/application/services/TelemetryPushWorker.ts` | Push to central with backoff |
