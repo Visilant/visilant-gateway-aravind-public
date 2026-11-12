@@ -152,6 +152,43 @@ Phones that predate release never see `RELEASED`: they read `GET /screenings` wi
 Retrying a `SENT` capture sends it again with the same SOP Instance UID. It does not
 reopen a completed screening.
 
+## Telemetry
+
+The phone sends telemetry events to the gateway, which keeps them in its outbox and
+pushes them to central. Event types, fields and the push are in
+[telemetry.md](telemetry.md).
+
+| Method | Path | Input / result |
+| --- | --- | --- |
+| `POST` | `/telemetry/events` | Token optional; see below. JSON `{ "events": [ <event>, ... ] }`, 1 to 100 events and at most 256 KB; over either is 413. Returns `{ "data": { "accepted": [...], "duplicate": [...], "dropped": [...] } }`, each a list of `event_id`. With telemetry off: 204, no body, nothing stored. |
+| `GET` | `/telemetry/export` | ADMIN. Optional `since=<event_id>`. NDJSON (`application/x-ndjson`) of the unsent rows written after that event, one envelope per line. 400 when `since` is not in the outbox. |
+
+Each event is `{ event_id, schema_version, type, occurred_at, device_id, session_id,
+capture_id?, screening_id?, payload }`. `event_id` is a lowercase UUIDv7 made by the
+phone. The gateway adds `received_at`, `site_id` and `gateway_id`.
+
+- `accepted`: stored now. `duplicate`: the gateway already had this `event_id` (a retry);
+  nothing changed. `dropped`: not stored because the gateway's outbox is over a cap or
+  its disk is short ([telemetry.md](telemetry.md#outbox-size)). The phone treats all
+  three as delivered and does not resend.
+- 400 means the whole request was rejected and nothing from it was stored. `details` is
+  a list of `{ event, field, reason }`: the index of the failing event (null for the batch
+  itself), the field path in our own names, and `unknown_key`, `missing` or `invalid`. It
+  never repeats a value, and an unknown key is shown as `<unknown key>`, never by its name. Unknown types, unknown keys,
+  and the gateway's own types (`gateway.*`, `ai.assessed`) are rejected.
+- Without a valid token (none, expired or invalid), only `app.started`, `app.crashed`,
+  `operation.failed`, `device.health` and `gateway.unreachable` are accepted. Any other
+  type refuses the whole request with 401, so sign in and send it again. An unsigned
+  request may be at most 32 KB with events of at most 8 KB, and is limited to 30 a
+  minute per client IP and 120 a minute from all unsigned clients; beyond those the
+  answer is 413 or 429 with `Retry-After`. Signed in, an event may be up to 32 KB. Each
+  stored row records `authenticated` true or false.
+- A gateway older than this answers 404. The app treats 404 as "telemetry not supported"
+  and stops sending for that session.
+
+The gateway writes `ai.assessed` itself when `POST /captures` carries a valid
+`ai_assessment`. The phone sends nothing extra for it.
+
 ## Queue and delivery
 
 | Method | Path | Purpose |
@@ -177,7 +214,7 @@ Responses that expose patient content use `Cache-Control: no-store`.
 | `GET` | `/diagnostics/segments/:id` | Manifest, span and event counts, correlated runs; damaged lines are counted and skipped. |
 | `GET` | `/diagnostics/segments/:id/archive` | Stream `<id>.zip` with the segment files. |
 | `GET` | `/diagnostics/runs/:runId` | Roll-up across contributing segments and capture references. |
-| `GET` | `/system/config` | Effective config and runtime metadata; no signing secrets. |
+| `GET` | `/system/config` | Effective config and runtime metadata; no signing secrets, and `telemetry.central_token` shows as `(set)`. |
 | `GET` | `/system/device` | Current process and storage sample plus the last 12 samples at five-second intervals. |
 
 Failed captures also degrade `/health` and need operator attention. The app upload queue

@@ -6,8 +6,11 @@ import { SetupService } from './SetupService';
 import { startSetupServer } from './server';
 import { createLogger, Logger } from '../infrastructure/logger';
 import { safeErrorDetail } from './safe-error';
+import { stopChild } from './child-stop';
 
 const RETRY_MS = 5000;
+// The gateway's own shutdown gives up after 5 s; this is the launcher's limit after that.
+const CHILD_STOP_MS = 8000;
 
 function setupDirectory(): string {
     return path.resolve(process.env.GATEWAY_SETUP_DIR ?? (process.platform === 'win32'
@@ -57,12 +60,17 @@ async function main(directory: string, logger: Logger) {
     const server = await startSetupServer(service);
     try { await service.initialize(); } catch (error) { server.close(); throw error; }
     logger.info('Open gateway setup on this computer: http://127.0.0.1:8081');
+    // Ask the gateway to stop over IPC: on Windows a signal would end it without its
+    // shutdown code, and gateway.stopped would never be written.
     const stop = () => {
         stopping = true; if (retry) clearTimeout(retry);
         server.close();
-        if (child) { child.once('exit', () => process.exit(0)); child.kill('SIGTERM'); }
-        else process.exit(0);
-        setTimeout(() => process.exit(0), 6000).unref();
+        const running = child;
+        if (!running) { process.exit(0); return; }
+        void stopChild(running, CHILD_STOP_MS).then((outcome) => {
+            if (outcome === 'killed') logger.warn('The gateway did not stop within 8 seconds and was ended. Its next start reports an unclean shutdown.');
+        }).finally(() => process.exit(0));
+        setTimeout(() => process.exit(0), CHILD_STOP_MS + 2000).unref();
     };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
 }

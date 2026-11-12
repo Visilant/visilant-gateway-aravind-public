@@ -21,6 +21,8 @@ import { CaptureCreatedDto, CaptureListQueryDto, CaptureRowDto, CreateCaptureDto
 import { LIGHT_MODES, Laterality, LightMode } from '../dto/capture.dto';
 import { ScreeningService } from './ScreeningService';
 import { SyncWorker } from './SyncWorker';
+import { TelemetryService } from './TelemetryService';
+import { deterministicUuidV7 } from '../../domain/telemetry-id';
 
 @Service()
 export class CaptureService {
@@ -32,6 +34,7 @@ export class CaptureService {
         private readonly storage: LocalDiskStorage,
         private readonly syncWorker: SyncWorker,
         private readonly screenings: ScreeningService,
+        private readonly telemetry: TelemetryService,
     ) {}
 
     async list(query: CaptureListQueryDto): Promise<CaptureRowDto[]> {
@@ -45,6 +48,26 @@ export class CaptureService {
     async get(id: string): Promise<CaptureRowDto | null> {
         const row = await this.captureRepository.findById(id);
         return row ? this.toRow(row) : null;
+    }
+
+    // The AI result may leave the site, joined by capture_id. The worklist entry, where
+    // the patient is, never goes with it. Its event_id is derived from the capture, so a
+    // retry writes the same event and the outbox keeps one. A failure never fails the
+    // capture.
+    private async recordAssessment(capture: CaptureEntity, input: CreateCaptureDto, clientCaptureId: string | null): Promise<void> {
+        if (!input.ai_assessment) return;
+        await this.telemetry.record('ai.assessed', {
+            gateway_capture_id: capture.id,
+            laterality: input.laterality,
+            light: input.light ?? null,
+            assessment: input.ai_assessment,
+        }, { capture_id: clientCaptureId ?? capture.id, screening_id: input.screening_id ?? null }, {
+            event_id: deterministicUuidV7(`ai.assessed:${capture.id}`, Date.parse(capture.created_at)),
+            occurred_at: capture.created_at,
+        }).catch((err: unknown) => {
+            this.logger.warn(`could not write ai.assessed telemetry for capture ${capture.id}; the capture is queued as normal: ` +
+                `${err instanceof Error ? err.message : String(err)}`);
+        });
     }
 
     private async toRow(row: CaptureEntity): Promise<CaptureRowDto> {
@@ -72,6 +95,9 @@ export class CaptureService {
             if (existing) {
                 await fs.rm(uploadPath, { force: true }).catch(() => undefined);
                 diagnostics.event('capture.duplicate', { duplicates: 1 });
+                // The first attempt may have saved the capture and lost its ai.assessed
+                // to a power cut; the phone retries because it got no answer.
+                await this.recordAssessment(existing, input, clientCaptureId);
                 return this.toDto(existing);
             }
         }
@@ -158,6 +184,8 @@ export class CaptureService {
             this.logger.warn(`could not record activity for capture ${capture.id}; screening expiry may run early: ` +
                 `${err instanceof Error ? err.message : String(err)}`);
         });
+
+        await this.recordAssessment(capture, input, clientCaptureId);
 
         this.logger.info(`capture ${capture.id} queued`);
 

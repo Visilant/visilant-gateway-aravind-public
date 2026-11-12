@@ -7,10 +7,18 @@ import {
     IsInt,
     IsNotEmpty,
     IsPositive,
+    IsNumber,
     IsString,
+    IsUrl,
+    Matches,
     MaxLength,
     Min,
+    Validate,
+    ValidateIf,
     ValidateNested,
+    ValidatorConstraint,
+    type ValidationArguments,
+    type ValidatorConstraintInterface,
 } from 'class-validator';
 
 export type Retention = 'DELETE_ON_SENT' | 'KEEP';
@@ -64,6 +72,65 @@ export class MwlNodeConfig extends DicomNodeConfig {
     @IsString()
     @MaxLength(16)
     scheduled_station_ae?: string;
+}
+
+@ValidatorConstraint({ name: 'atLeastOutboxCap', async: false })
+class AtLeastOutboxCap implements ValidatorConstraintInterface {
+    validate(value: unknown, args: ValidationArguments): boolean {
+        return typeof value === 'number' && value >= (args.object as TelemetryConfig).max_outbox_mb;
+    }
+    defaultMessage(): string { return 'max_unsent_mb must be at least max_outbox_mb'; }
+}
+
+// Telemetry from phones and from the gateway itself, kept in a SQLite outbox and pushed
+// to the central store. See docs/telemetry.md. Off unless a site turns it on.
+export class TelemetryConfig {
+    // Off: POST /telemetry/events answers 204 and nothing is written, the gateway writes
+    // none of its own events, and nothing is pushed.
+    @IsBoolean()
+    enabled: boolean = false;
+
+    // The vision centre ID. Every row carries it, and central combines sites by it, so a
+    // gateway with telemetry on and no site_id refuses to start.
+    @ValidateIf((o: TelemetryConfig) => o.enabled || o.site_id !== undefined)
+    @IsString()
+    @Matches(/^[A-Za-z0-9_-]{1,64}$/, { message: 'site_id must be 1 to 64 letters, digits, _ or -' })
+    site_id?: string;
+
+    // The central receiver, without the /v1/telemetry/batch path. Without central_url and
+    // central_token rows stay in the outbox and can still be exported.
+    @ValidateIf((o: TelemetryConfig) => o.central_url !== undefined || o.central_token !== undefined)
+    @IsUrl({ protocols: ['http', 'https'], require_protocol: true, require_tld: false }, { message: 'central_url must be an http or https URL' })
+    central_url?: string;
+
+    // Per-gateway bearer token for central. Never returned by GET /system/config.
+    @ValidateIf((o: TelemetryConfig) => o.central_url !== undefined || o.central_token !== undefined)
+    @IsString()
+    @IsNotEmpty()
+    central_token?: string;
+
+    // Sent rows are pruned oldest first above this size or this age. Unsent rows are
+    // never pruned; when they alone pass the cap the gateway stops taking device.health.
+    @IsNumber()
+    @IsPositive()
+    max_outbox_mb: number = 200;
+
+    // The second, higher cap on unsent rows. Past max_outbox_mb, unsigned rows and
+    // device.health are refused; past this, everything but the gateway's own lifecycle.
+    @IsNumber()
+    @IsPositive()
+    @Validate(AtLeastOutboxCap)
+    max_unsent_mb: number = 400;
+
+    // Below this much free disk the gateway stores no telemetry at all, so captures
+    // always have room.
+    @IsNumber()
+    @Min(0)
+    min_free_disk_mb: number = 1024;
+
+    @IsInt()
+    @IsPositive()
+    retention_days: number = 90;
 }
 
 export class GatewayConfig {
@@ -140,4 +207,10 @@ export class GatewayConfig {
     @ValidateNested()
     @Type(() => DicomNodeConfig)
     store!: DicomNodeConfig;
+
+    // Optional block: a config without it has telemetry off.
+    @IsDefined()
+    @ValidateNested()
+    @Type(() => TelemetryConfig)
+    telemetry: TelemetryConfig = new TelemetryConfig();
 }

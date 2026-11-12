@@ -10,7 +10,8 @@ import Container, { Inject, Service } from 'typedi';
 import type { GatewayConfig } from '../config';
 import type { Logger } from '../infrastructure/logger';
 import { CONFIG, LOGGER } from '../tokens';
-import { AuthController, CaptureController, DiagnosticsController, DicomPreviewController, HealthController, ScreeningController, SystemController, WorklistController } from './controllers';
+import { AuthController, CaptureController, DiagnosticsController, DicomPreviewController, HealthController, ScreeningController, SystemController, TelemetryController, WorklistController } from './controllers';
+import { telemetryBodyLimits } from './telemetry-limits';
 import { ResponseEnvelopeInterceptor } from './response.interceptor';
 import { AuthService } from '../application/services';
 import type { UserEntity } from '../infrastructure/database';
@@ -55,6 +56,9 @@ export class GatewayServer {
                 next();
             });
         });
+        // Telemetry has its own, smaller limits, so its body is parsed first. The general
+        // parser below then leaves it alone.
+        app.use('/telemetry/events', ...telemetryBodyLimits());
         app.use(express.json({ limit: '1mb' }));
         if (process.env.GATEWAY_SETUP_TOKEN) {
             const verification = Container.get(SetupVerificationService);
@@ -78,7 +82,7 @@ export class GatewayServer {
         }
 
         useExpressServer(app, {
-            controllers: [SetupController, AuthController, HealthController, SystemController, WorklistController, CaptureController, DiagnosticsController, WorklistDiagnosticsController, DicomPreviewController, ScreeningController],
+            controllers: [SetupController, AuthController, HealthController, SystemController, WorklistController, CaptureController, DiagnosticsController, WorklistDiagnosticsController, DicomPreviewController, ScreeningController, TelemetryController],
             middlewares: [ErrorHandlerMiddleware],
             interceptors: [ResponseEnvelopeInterceptor],
 

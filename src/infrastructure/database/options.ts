@@ -1,6 +1,6 @@
 import path from 'path';
 import type { BetterSqlite3ConnectionOptions } from 'typeorm/driver/better-sqlite3/BetterSqlite3ConnectionOptions';
-import { CaptureEntity, ScreeningEntity, SettingEntity, UserEntity } from './entities';
+import { CaptureEntity, ScreeningEntity, SettingEntity, TelemetryEventEntity, UserEntity } from './entities';
 
 // Resolves to ./migrations in source and build/migrations once compiled.
 const MIGRATIONS_GLOB = path.join(__dirname, '../../../migrations/*.{ts,js}');
@@ -11,14 +11,18 @@ const MIGRATIONS_GLOB = path.join(__dirname, '../../../migrations/*.{ts,js}');
 //   journal_mode  — WAL, so the API can read while the worker writes. Without it,
 //                   normal concurrent use produces SQLITE_BUSY.
 //   busy_timeout  — default is 0, i.e. fail instantly rather than wait briefly.
+//   auto_vacuum   — INCREMENTAL, so pruned telemetry can give its pages back to the
+//                   disk. It only takes effect on a new file; createDatabase converts an
+//                   existing one once.
 export function buildDataSourceOptions(databasePath: string): BetterSqlite3ConnectionOptions {
     return {
         type: 'better-sqlite3',
         database: databasePath,
-        entities: [CaptureEntity, ScreeningEntity, SettingEntity, UserEntity],
+        entities: [CaptureEntity, ScreeningEntity, SettingEntity, TelemetryEventEntity, UserEntity],
         migrations: [MIGRATIONS_GLOB],
         synchronize: false,
         prepareDatabase: (db) => {
+            db.pragma('auto_vacuum = INCREMENTAL');
             db.pragma('journal_mode = WAL');
             db.pragma('foreign_keys = ON');
             db.pragma('busy_timeout = 5000');

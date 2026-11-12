@@ -4,3 +4,4 @@ export { SignInDto, RefreshDto, AuthTokensDto, AuthUserDto } from './auth.dto';
 
 export * from './diagnostics.dto';
 export { SetupCompleteDto } from './setup.dto';
+export * from './telemetry.dto';
