@@ -6,7 +6,8 @@ export class FixedWindowLimiter {
     constructor(
         private readonly limit: number,
         private readonly windowMs: number,
-        private readonly now: () => number = Date.now,
+        // Monotonic, so a wall clock set back cannot lock a client out.
+        private readonly now: () => number = () => performance.now(),
     ) {}
 
     get size(): number {

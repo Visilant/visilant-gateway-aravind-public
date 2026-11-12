@@ -177,9 +177,11 @@ phone. The gateway adds `received_at`, `site_id` and `gateway_id`.
   and the gateway's own types (`gateway.*`, `ai.assessed`) are rejected.
 - Without a valid token (none, expired or invalid), only `app.started`, `app.crashed`,
   `operation.failed`, `device.health` and `gateway.unreachable` are accepted. Any other
-  type refuses the whole request with 401, so sign in and send it again. Unsigned
-  requests are limited to 30 a minute per client IP; beyond that the answer is 429 with
-  `Retry-After`. Each stored row records `authenticated` true or false.
+  type refuses the whole request with 401, so sign in and send it again. An unsigned
+  request may be at most 32 KB with events of at most 8 KB, and is limited to 30 a
+  minute per client IP and 120 a minute from all unsigned clients; beyond those the
+  answer is 413 or 429 with `Retry-After`. Signed in, an event may be up to 32 KB. Each
+  stored row records `authenticated` true or false.
 - A gateway older than this answers 404. The app treats 404 as "telemetry not supported"
   and stops sending for that session.
 

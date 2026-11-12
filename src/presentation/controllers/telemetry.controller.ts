@@ -1,54 +1,38 @@
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { once } from 'events';
 import type { ValidationError } from 'class-validator';
-import { Authorized, BadRequestError, Body, CurrentUser, Get, HttpError, JsonController, OnUndefined, Post, QueryParams, Req, Res, UnauthorizedError } from 'routing-controllers';
+import { Authorized, BadRequestError, Body, CurrentUser, Get, HttpError, JsonController, OnUndefined, Post, QueryParams, Res, UnauthorizedError, UseBefore } from 'routing-controllers';
 import { Inject, Service } from 'typedi';
-import { ANONYMOUS_REQUESTS_PER_MINUTE, PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
-import { TelemetryCursorNotFoundError, TelemetryService, TelemetrySignInRequiredError } from '../../application/services';
+import { PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
+import { TelemetryCursorNotFoundError, TelemetryEventTooLargeError, TelemetryService, TelemetrySignInRequiredError } from '../../application/services';
 import { UserEntity, UserRole } from '../../infrastructure/database';
 import type { Logger } from '../../infrastructure/logger';
 import { LOGGER } from '../../tokens';
-import { FixedWindowLimiter } from '../rate-limiter';
+import { TelemetryAccess } from '../middlewares/telemetry-access.middleware';
 import { validateDto } from '../validation';
 
 @JsonController('/telemetry')
 @Service()
 export class TelemetryController {
-    // The route takes some types without a token, so anyone on the LAN can write to it.
-    private readonly anonymousLimit = new FixedWindowLimiter(ANONYMOUS_REQUESTS_PER_MINUTE, 60_000);
-
     constructor(
         private readonly telemetry: TelemetryService,
         @Inject(LOGGER) private readonly logger: Logger,
     ) {}
 
-    // Size limits (100 events, 256 KB) are applied before this, in server.ts.
-    // A token is optional: without one (or with an expired one) only the pre-sign-in
-    // types are taken, and requests are limited per client IP.
+    // Size limits (100 events, 256 KB) are applied before this, in server.ts. Telemetry
+    // off, the optional token and the limits for unsigned requests are TelemetryAccess.
     @Post('/events')
+    @UseBefore(TelemetryAccess)
     @OnUndefined(204)
     async events(
         @Body({ validate: false }) body: unknown,
         @CurrentUser({ required: false }) user: UserEntity | undefined,
-        @Req() req: Request,
-        @Res() res: Response,
-    ): Promise<TelemetryIngestResultDto | undefined> {
-        // Off: answer, store nothing, and do not spend effort validating what is dropped.
-        if (!this.telemetry.enabled) return undefined;
-        const authenticated = !!user;
-        if (!authenticated) {
-            const taken = this.anonymousLimit.take(req.socket.remoteAddress ?? 'unknown');
-            if (!taken.allowed) {
-                res.setHeader('Retry-After', String(taken.retryAfterSeconds));
-                throw new HttpError(429, `more than ${ANONYMOUS_REQUESTS_PER_MINUTE} telemetry requests a minute without sign-in; wait, or sign in`);
-            }
-        }
+    ): Promise<TelemetryIngestResultDto> {
         const batch = this.parse(body);
         try {
-            return await this.telemetry.ingest(batch.events, authenticated);
+            return await this.telemetry.ingest(batch.events, !!user);
         } catch (err) {
-            if (err instanceof TelemetrySignInRequiredError) throw new UnauthorizedError(err.message);
-            throw err;
+            throw mapTelemetryError(err);
         }
     }
 
@@ -81,8 +65,7 @@ export class TelemetryController {
         try {
             chunks = await this.telemetry.exportUnsent(query.since ?? null);
         } catch (err) {
-            if (err instanceof TelemetryCursorNotFoundError) throw new BadRequestError(err.message);
-            throw err;
+            throw mapTelemetryError(err);
         }
         res.set({
             'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -103,6 +86,13 @@ export class TelemetryController {
         }
         return res;
     }
+}
+
+export function mapTelemetryError(err: unknown): unknown {
+    if (err instanceof TelemetrySignInRequiredError) return new UnauthorizedError(err.message);
+    if (err instanceof TelemetryEventTooLargeError) return new HttpError(413, err.message);
+    if (err instanceof TelemetryCursorNotFoundError) return new BadRequestError(err.message);
+    return err;
 }
 
 // What a 400 and the log may say about a rejected field. Key names the client sent

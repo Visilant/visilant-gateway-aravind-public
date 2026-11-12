@@ -76,14 +76,20 @@ the route, an unsigned request is limited:
 - Only `app.started`, `app.crashed`, `operation.failed`, `device.health` and
   `gateway.unreachable` are taken. A batch with any other type is refused whole with 401
   (`<type> needs a signed-in phone`), and nothing from it is stored.
-- At most 30 requests a minute per client IP. Beyond that the answer is 429 with
-  `Retry-After`. Rejected and invalid requests count too. The count is in memory and a
-  restart clears it.
+- At most 32 KB a request and 8 KB an event (413 beyond either). A pre-sign-in crash
+  with more stack frames than fit must send fewer.
+- At most 30 requests a minute per client IP, and 120 a minute from all unsigned
+  clients together, so rotating addresses do not get around it. Beyond either the answer
+  is 429 with `Retry-After`. Rejected and invalid requests count too. The counts are in
+  memory and a restart clears them.
 - Each row is stored with `authenticated: false`, so central can tell these rows apart
   and weigh them accordingly.
 
 An expired or invalid token is treated as no token. A signed-in request may send every
-phone type and is not rate-limited.
+phone type, is not rate-limited, and may carry events of up to 32 KB each. These checks
+are `TelemetryAccess`, a middleware on the route; the type rule and the event sizes are
+in `TelemetryService`. Unsigned rows also count first against the
+[outbox caps](#outbox-size).
 
 ## Event types
 
@@ -218,7 +224,8 @@ patient's `.dcm` at the site, on purpose. Patient identity never enters a record
 | `src/application/dto/telemetry.dto.ts` | Envelope and payload rules per type, limits |
 | `src/presentation/controllers/telemetry.controller.ts` | `POST /telemetry/events`, `GET /telemetry/export` |
 | `src/presentation/telemetry-limits.ts` | 256 KB and 100-event limits (413) |
-| `src/presentation/rate-limiter.ts` | Per-IP limit for requests without a token (429) |
+| `src/presentation/middlewares/telemetry-access.middleware.ts` | Telemetry off (204), the optional token, limits for unsigned requests (413, 429) |
+| `src/presentation/rate-limiter.ts` | The fixed-window counter those limits use |
 | `src/application/services/TelemetryService.ts` | Writes phone and gateway events, `gateway_id`, export |
 | `src/application/services/TelemetryLifecycle.ts` | Started, heartbeat, stopped, unclean shutdown |
 | `src/application/services/TelemetryPushWorker.ts` | Push to central with backoff |

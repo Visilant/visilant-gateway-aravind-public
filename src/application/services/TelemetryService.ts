@@ -8,9 +8,16 @@ import { CONFIG, LOGGER } from '../../tokens';
 import { TelemetryOutbox } from './TelemetryOutbox';
 import { toEnvelope } from './telemetryEnvelope';
 import { PUSH_BATCH_SIZE, TelemetryPushWorker } from './TelemetryPushWorker';
-import { PRE_SIGN_IN_EVENT_TYPES, type GatewayEventType, type TelemetryEventDto, type TelemetryIngestResultDto } from '../dto';
+import { MAX_ANONYMOUS_EVENT_BYTES, MAX_EVENT_BYTES, PRE_SIGN_IN_EVENT_TYPES, type GatewayEventType, type TelemetryEventDto, type TelemetryIngestResultDto } from '../dto';
 
 const GATEWAY_ID_KEY = 'telemetry.gateway_id';
+
+// One event is over its size limit, which is lower without sign-in.
+export class TelemetryEventTooLargeError extends Error {
+    constructor(index: number, limitBytes: number, authenticated: boolean) {
+        super(`telemetry event ${index} is over ${limitBytes / 1024} KB` + (authenticated ? '; send fewer stack frames' : '; send fewer stack frames, or sign in'));
+    }
+}
 
 // GET /telemetry/export?since= names an event this outbox does not hold.
 export class TelemetryCursorNotFoundError extends Error {
@@ -74,6 +81,9 @@ export class TelemetryService {
             const needsSignIn = events.find((event) => !PRE_SIGN_IN_EVENT_TYPES.includes(event.type));
             if (needsSignIn) throw new TelemetrySignInRequiredError(needsSignIn.type);
         }
+        const limit = authenticated ? MAX_EVENT_BYTES : MAX_ANONYMOUS_EVENT_BYTES;
+        const tooLarge = events.findIndex((event) => Buffer.byteLength(JSON.stringify(event)) > limit);
+        if (tooLarge >= 0) throw new TelemetryEventTooLargeError(tooLarge, limit, authenticated);
         const gatewayId = await this.gatewayId();
         const receivedAt = new Date().toISOString();
         const result: TelemetryIngestResultDto = { accepted: [], duplicate: [], dropped: [] };

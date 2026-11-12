@@ -13,8 +13,14 @@ import { LIGHT_MODES } from './capture.dto';
 
 export const MAX_EVENTS_PER_REQUEST = 100;
 export const MAX_BODY_BYTES = 256 * 1024;
-// Requests without a valid token, per client IP.
+// Without a valid token anyone on the centre's network can reach the route, so those
+// requests get tighter limits: per client IP, for the whole gateway, and by size.
 export const ANONYMOUS_REQUESTS_PER_MINUTE = 30;
+export const ANONYMOUS_REQUESTS_PER_MINUTE_ALL = 120;
+export const MAX_ANONYMOUS_BODY_BYTES = 32 * 1024;
+export const MAX_ANONYMOUS_EVENT_BYTES = 8 * 1024;
+// Any one event, signed in. A 64-frame crash is well under it.
+export const MAX_EVENT_BYTES = 32 * 1024;
 
 export const PHONE_EVENT_TYPES = [
     'app.started', 'app.crashed', 'operation.failed', 'capture.taken', 'capture.uploaded', 'capture.upload_failed',

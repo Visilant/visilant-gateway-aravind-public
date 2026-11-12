@@ -79,8 +79,8 @@ describe('before sign-in', () => {
     });
 
     test('without a token: 30 requests a minute per client, then 429 with Retry-After', async () => {
-        let now = Date.parse('2026-11-12T00:00:00.000Z');
-        jest.spyOn(Date, 'now').mockImplementation(() => now);
+        let now = 1_000_000;
+        jest.spyOn(performance, 'now').mockImplementation(() => now);
         try {
             for (let i = 0; i < 30; i++) expect((await post({ events: [phoneEvent('device.health')] }, null)).status).toBe(200);
             const limited = await fetch(base + '/telemetry/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: [phoneEvent('device.health')] }) });
@@ -95,6 +95,21 @@ describe('before sign-in', () => {
             expect((await post({ events: [phoneEvent('device.health')] }, null)).status).toBe(200);
             expect(await rows()).toHaveLength(32);
         } finally { jest.restoreAllMocks(); }
+    });
+
+    // A pre-sign-in event that fills its whole allowance is about 8 KB; nothing a phone
+    // sends before sign-in needs more.
+    test('without a token an event may be at most 8 KB; signed in, 32 KB', async () => {
+        const frames = (n: number) => Array.from({ length: n }, (_, i) => ({ class: `org.visilant.capture.Frame${i}`.padEnd(200, 'x'), method: 'run', file: 'Frame.kt', line: i }));
+        const crash = (n: number) => phoneEvent('app.crashed', { payload: { ...PAYLOADS['app.crashed'].payload, stack_frames: frames(n) } });
+        const small = await post({ events: [crash(40)] }, null);
+        expect(small.status).toBe(413);
+        expect(small.json.error).toMatch(/event 0 is over 8 KB/);
+        expect((await post({ events: [crash(40)] })).status).toBe(200);
+        expect((await post({ events: [crash(64)] })).status).toBe(200);
+        const huge = phoneEvent('app.crashed', { payload: { ...PAYLOADS['app.crashed'].payload, stack_frames: Array.from({ length: 64 }, () => ({ class: 'a'.repeat(256), method: 'm'.repeat(128), file: 'F'.repeat(120) + '.kt', line: 1 })) } });
+        expect((await post({ events: [huge] })).json.error).toMatch(/event 0 is over 32 KB/);
+        expect(await rows()).toHaveLength(2);
     });
 
     test('telemetry off: 204 without a token as well, and nothing counts against the limit', async () => {
