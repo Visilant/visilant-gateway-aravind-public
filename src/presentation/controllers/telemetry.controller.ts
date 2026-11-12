@@ -1,8 +1,11 @@
+import type { Response } from 'express';
+import { once } from 'events';
 import type { ValidationError } from 'class-validator';
-import { Authorized, Body, JsonController, OnUndefined, Post } from 'routing-controllers';
+import { Authorized, Body, Get, JsonController, OnUndefined, Post, QueryParams, Res } from 'routing-controllers';
 import { Inject, Service } from 'typedi';
-import { PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryIngestResultDto } from '../../application/dto';
+import { PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
 import { TelemetryService } from '../../application/services';
+import { UserRole } from '../../infrastructure/database';
 import type { Logger } from '../../infrastructure/logger';
 import { LOGGER } from '../../tokens';
 import { validateDto } from '../validation';
@@ -30,6 +33,30 @@ export class TelemetryController {
             throw err;
         }
         return this.telemetry.ingest(batch.events);
+    }
+
+    // NDJSON of the unsent rows, for a site that stays offline. See docs/telemetry.md.
+    @Get('/export')
+    @Authorized(UserRole.ADMIN)
+    async export(@QueryParams() query: TelemetryExportQueryDto, @Res() res: Response): Promise<Response> {
+        res.set({
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Content-Disposition': `attachment; filename="${this.telemetry.exportFilename()}"`,
+            'Cache-Control': 'no-store',
+        });
+        res.flushHeaders();
+        try {
+            for await (const chunk of this.telemetry.exportUnsent(query.since ?? null)) {
+                if (res.destroyed) break;
+                if (!res.write(chunk)) await Promise.race([once(res, 'drain'), once(res, 'close')]);
+            }
+            res.end();
+        } catch (err) {
+            // Headers are gone, so the only signal left is a cut connection.
+            this.logger.error(`telemetry export failed part way: ${err instanceof Error ? err.message : String(err)}`);
+            res.destroy();
+        }
+        return res;
     }
 }
 

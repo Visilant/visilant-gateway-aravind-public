@@ -6,10 +6,12 @@ import { SettingRepository, TelemetryRepository } from '../../infrastructure/dat
 import type { Logger } from '../../infrastructure/logger';
 import { CONFIG, LOGGER } from '../../tokens';
 import { TelemetryOutbox } from './TelemetryOutbox';
+import { toEnvelope } from './telemetryEnvelope';
 import { PUSH_BATCH_SIZE, TelemetryPushWorker } from './TelemetryPushWorker';
 import type { GatewayEventType, TelemetryEventDto, TelemetryIngestResultDto } from '../dto';
 
 const GATEWAY_ID_KEY = 'telemetry.gateway_id';
+const EXPORT_PAGE = 500;
 
 // Writes telemetry into the SQLite outbox: phone events from POST /telemetry/events and
 // the gateway's own events. Pushing and pruning are TelemetryPushWorker and
@@ -108,6 +110,25 @@ export class TelemetryService {
         });
         await this.repository.insertOrIgnore([row]);
         return row.event_id;
+    }
+
+    // Unsent rows after `since`, one NDJSON line each, read a page at a time so a long
+    // backlog is never held in memory. For a site whose internet is down for long: a
+    // support person uploads the file to central, which ignores what it already has.
+    async *exportUnsent(since: string | null): AsyncGenerator<string> {
+        let cursor = since;
+        for (;;) {
+            const page = await this.repository.findUnsent(EXPORT_PAGE, cursor);
+            if (page.length === 0) return;
+            yield page.map((row) => JSON.stringify(toEnvelope(row)) + '\n').join('');
+            if (page.length < EXPORT_PAGE) return;
+            cursor = page[page.length - 1].event_id;
+        }
+    }
+
+    exportFilename(now = new Date()): string {
+        const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+        return `telemetry-${this.config.telemetry.site_id ?? 'no-site'}-${stamp}.ndjson`;
     }
 
     private siteId(): string {

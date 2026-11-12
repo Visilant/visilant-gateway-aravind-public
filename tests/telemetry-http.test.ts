@@ -170,3 +170,58 @@ test('POST /captures with an AI assessment writes ai.assessed, without the workl
     expect(JSON.parse(row.payload)).toEqual({ gateway_capture_id: (await response.json() as any).data.id, laterality: 'L', light: 'WHITE', assessment });
     expect(JSON.stringify(row)).not.toMatch(/SYNTH-ACC|SYNTH-MRN|PATIENT/);
 });
+
+describe('GET /telemetry/export', () => {
+    async function exportRows(query = '', token: string | null = 'ADMIN') {
+        const response = await fetch(base + '/telemetry/export' + query, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        const text = await response.text();
+        return { status: response.status, headers: response.headers, text, lines: text ? text.trimEnd().split('\n').map(line => JSON.parse(line)) : [] };
+    }
+
+    test('is for admins only', async () => {
+        expect((await exportRows('', null)).status).toBe(401);
+        expect((await exportRows('', 'OPERATOR')).status).toBe(403);
+    });
+
+    test('streams unsent rows as NDJSON in the push envelope, in event_id order', async () => {
+        const events = [phoneEvent('device.health'), phoneEvent('app.started'), phoneEvent('capture.taken')];
+        await post({ events });
+        const stored = await rows();
+        await database.getRepository(TelemetryEventEntity).update({ event_id: events[1].event_id as string }, { sent_at: new Date().toISOString() });
+        const response = await exportRows();
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toMatch(/^application\/x-ndjson/);
+        expect(response.headers.get('content-disposition')).toMatch(/^attachment; filename="telemetry-VC-SYNTH-01-\d{8}T\d{6}Z\.ndjson"$/);
+        const { sent_at: _s, ...first } = stored.find(r => r.event_id === events[0].event_id)!;
+        expect(response.lines.map(l => l.event_id)).toEqual([events[0].event_id, events[2].event_id]);
+        expect(response.lines[0]).toEqual({ ...first, payload: events[0].payload });
+        expect(response.text.endsWith('\n')).toBe(true);
+    });
+
+    test('since returns only rows after that event_id', async () => {
+        const events = [phoneEvent('device.health'), phoneEvent('device.health'), phoneEvent('device.health')];
+        await post({ events });
+        expect((await exportRows(`?since=${events[0].event_id}`)).lines.map(l => l.event_id)).toEqual([events[1].event_id, events[2].event_id]);
+    });
+
+    test('an empty outbox is an empty file', async () => {
+        const response = await exportRows();
+        expect(response.status).toBe(200);
+        expect(response.text).toBe('');
+    });
+
+    test('rejects a since that is not an event_id, and unknown query keys', async () => {
+        expect((await exportRows('?since=SYNTHETIC-PATIENT')).status).toBe(400);
+        expect((await exportRows('?since=SYNTHETIC-PATIENT')).text).not.toContain('SYNTHETIC-PATIENT');
+        expect((await exportRows('?from=x')).status).toBe(400);
+    });
+
+    test('streams a backlog larger than one page', async () => {
+        for (let i = 0; i < 12; i++) await post({ events: Array.from({ length: 100 }, () => phoneEvent('device.health')) });
+        const response = await exportRows();
+        expect(response.lines).toHaveLength(1200);
+        const ids = response.lines.map(l => l.event_id);
+        expect([...ids].sort()).toEqual(ids);
+        expect(new Set(ids).size).toBe(1200);
+    });
+});

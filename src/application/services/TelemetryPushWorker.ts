@@ -1,10 +1,10 @@
 import { Inject, Service } from 'typedi';
 import type { GatewayConfig } from '../../config';
-import type { TelemetryEventEntity } from '../../infrastructure/database';
 import { TelemetryRepository } from '../../infrastructure/database/repositories';
 import type { Logger } from '../../infrastructure/logger';
 import { CentralClient, CentralPushError } from '../../infrastructure/telemetry';
 import { CONFIG, LOGGER } from '../../tokens';
+import { toEnvelope } from './telemetryEnvelope';
 
 export const PUSH_BATCH_SIZE = 500;
 const INTERVAL_MS = 60_000;
@@ -72,7 +72,7 @@ export class TelemetryPushWorker {
             for (;;) {
                 const batch = await this.repository.findUnsent(PUSH_BATCH_SIZE);
                 if (batch.length === 0) break;
-                const returned = new Set(await this.central.pushBatch(central_url as string, central_token as string, batch.map(envelope)));
+                const returned = new Set(await this.central.pushBatch(central_url as string, central_token as string, batch.map(toEnvelope)));
                 const confirmed = batch.filter((row) => returned.has(row.event_id)).map((row) => row.event_id);
                 sent += await this.repository.markSent(confirmed, new Date().toISOString());
                 if (confirmed.length === 0) {
@@ -96,12 +96,6 @@ export class TelemetryPushWorker {
         if (sent) this.logger.info(`telemetry: ${sent} event(s) confirmed by central`);
         return { sent };
     }
-}
-
-// The row as it is stored centrally: the envelope, payload as an object, no sent_at.
-function envelope(row: TelemetryEventEntity): object {
-    const { sent_at: _sentAt, payload, ...rest } = row;
-    return { ...rest, payload: JSON.parse(payload) as unknown };
 }
 
 export function pushBackoffMs(failures: number): number {
