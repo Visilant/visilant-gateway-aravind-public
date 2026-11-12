@@ -25,7 +25,7 @@ const EXPORT_PAGE = 500;
 // TelemetryOutbox. See docs/telemetry.md.
 @Service()
 export class TelemetryService {
-    private gatewayIdValue: string | null = null;
+    private gatewayIdValue: Promise<string> | null = null;
 
     constructor(
         @Inject(CONFIG) private readonly config: GatewayConfig,
@@ -42,16 +42,22 @@ export class TelemetryService {
 
     // Generated on first use and kept in the Setting table, so it survives a reinstall
     // that keeps the database. It tells apart two gateways at one site.
-    async gatewayId(): Promise<string> {
-        if (this.gatewayIdValue) return this.gatewayIdValue;
-        let value = await this.settings.get(GATEWAY_ID_KEY);
-        if (!value) {
-            value = uuidv4();
-            await this.settings.set(GATEWAY_ID_KEY, value);
-            this.logger.info(`telemetry: generated gateway_id ${value}`);
-        }
-        this.gatewayIdValue = value;
-        return value;
+    // INSERT OR IGNORE then read, so concurrent first calls (and two processes) agree.
+    gatewayId(): Promise<string> {
+        this.gatewayIdValue ??= this.loadGatewayId().catch((err: unknown) => {
+            this.gatewayIdValue = null;
+            throw err;
+        });
+        return this.gatewayIdValue;
+    }
+
+    private async loadGatewayId(): Promise<string> {
+        const existing = await this.settings.get(GATEWAY_ID_KEY);
+        if (existing) return existing;
+        const candidate = uuidv4();
+        const stored = await this.settings.insertIfAbsent(GATEWAY_ID_KEY, candidate);
+        if (stored === candidate) this.logger.info(`telemetry: generated gateway_id ${stored}`);
+        return stored;
     }
 
     // `authenticated`: whether the request carried a valid token. Without one, only the

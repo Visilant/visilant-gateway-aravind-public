@@ -24,21 +24,23 @@ export class TelemetryRepository {
         this.repo = database.getRepository(TelemetryEventEntity);
     }
 
-    // INSERT OR IGNORE on event_id, in one transaction. Returns, per row, whether it was
-    // new. A retry from the phone, or the same event twice in a batch, is ignored.
+    // One INSERT OR IGNORE statement for the whole batch, never an explicit transaction.
+    // TypeORM's better-sqlite3 driver shares one connection, so a second BEGIN while
+    // another transaction is open (the capture queue's claimDue, for one) makes both
+    // fail. A single statement is atomic on its own.
+    //
+    // Returns, per row, whether it was new. A retry from the phone, or the same event
+    // twice in a batch, is ignored, and only its first copy counts as new.
     async insertOrIgnore(rows: TelemetryEventEntity[]): Promise<boolean[]> {
         if (rows.length === 0) return [];
-        const sql = `INSERT OR IGNORE INTO "telemetry_event" (${COLUMNS.map(c => `"${c}"`).join(', ')}) VALUES (${COLUMNS.map(() => '?').join(', ')})`;
-        return this.database.transaction(async (manager) => {
-            const inserted: boolean[] = [];
-            for (const row of rows) {
-                // SQLite has no boolean: TypeORM stores the column as 1 or 0.
-                const values = COLUMNS.map((c) => typeof row[c] === 'boolean' ? (row[c] ? 1 : 0) : row[c] ?? null);
-                const result = await manager.queryRunner!.query(sql, values, true) as { affected?: number };
-                inserted.push((result.affected ?? 0) > 0);
-            }
-            return inserted;
-        });
+        const placeholders = `(${COLUMNS.map(() => '?').join(', ')})`;
+        const sql = `INSERT OR IGNORE INTO "telemetry_event" (${COLUMNS.map(c => `"${c}"`).join(', ')}) `
+            + `VALUES ${rows.map(() => placeholders).join(', ')} RETURNING "event_id"`;
+        // SQLite has no boolean: TypeORM stores the column as 1 or 0.
+        const values = rows.flatMap((row) => COLUMNS.map((c) => typeof row[c] === 'boolean' ? (row[c] ? 1 : 0) : row[c] ?? null));
+        const returned = await this.database.query(sql, values) as Array<{ event_id: string }>;
+        const fresh = new Set(returned.map((r) => r.event_id));
+        return rows.map((row) => fresh.delete(row.event_id));
     }
 
     // Unsent rows in event_id order, optionally after a cursor.
