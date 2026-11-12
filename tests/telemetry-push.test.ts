@@ -7,6 +7,7 @@ import { CentralClient } from '../src/infrastructure/telemetry';
 import { TelemetryEventEntity } from '../src/infrastructure/database/entities';
 import { TelemetryRepository } from '../src/infrastructure/database/repositories';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
+import { openOutbox } from './fixtures/outbox';
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 let database: DataSource, repository: TelemetryRepository, config: GatewayConfig;
@@ -30,7 +31,7 @@ async function seed(count: number): Promise<TelemetryEventEntity[]> {
 }
 const unsent = () => repository.countUnsent();
 function worker(): TelemetryPushWorker {
-    return new TelemetryPushWorker(config, logger as never, repository, new CentralClient());
+    return new TelemetryPushWorker(config, logger as never, repository, new CentralClient(), openOutbox() as never);
 }
 
 beforeEach(async () => {

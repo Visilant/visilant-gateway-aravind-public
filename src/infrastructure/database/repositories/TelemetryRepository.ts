@@ -32,15 +32,23 @@ export class TelemetryRepository {
     // Returns, per row, whether it was new. A retry from the phone, or the same event
     // twice in a batch, is ignored, and only its first copy counts as new.
     async insertOrIgnore(rows: TelemetryEventEntity[]): Promise<boolean[]> {
-        if (rows.length === 0) return [];
+        return (await this.insert(rows)).inserted;
+    }
+
+    // insertOrIgnore, plus the estimated bytes of the rows that were new.
+    async insert(rows: TelemetryEventEntity[]): Promise<{ inserted: boolean[]; bytes: number }> {
+        if (rows.length === 0) return { inserted: [], bytes: 0 };
         const placeholders = `(${COLUMNS.map(() => '?').join(', ')})`;
         const sql = `INSERT OR IGNORE INTO "telemetry_event" (${COLUMNS.map(c => `"${c}"`).join(', ')}) `
-            + `VALUES ${rows.map(() => placeholders).join(', ')} RETURNING "event_id"`;
+            + `VALUES ${rows.map(() => placeholders).join(', ')} RETURNING "event_id", ${ROW_BYTES} AS "bytes"`;
         // SQLite has no boolean: TypeORM stores the column as 1 or 0.
         const values = rows.flatMap((row) => COLUMNS.map((c) => typeof row[c] === 'boolean' ? (row[c] ? 1 : 0) : row[c] ?? null));
-        const returned = await this.database.query(sql, values) as Array<{ event_id: string }>;
+        const returned = await this.database.query(sql, values) as Array<{ event_id: string; bytes: number }>;
         const fresh = new Set(returned.map((r) => r.event_id));
-        return rows.map((row) => fresh.delete(row.event_id));
+        return {
+            inserted: rows.map((row) => fresh.delete(row.event_id)),
+            bytes: returned.reduce((sum, r) => sum + Number(r.bytes), 0),
+        };
     }
 
     // The next rows to push: unsent and not quarantined, in the order they were written.
@@ -62,23 +70,50 @@ export class TelemetryRepository {
         return row?.seq ?? null;
     }
 
-    countAll(): Promise<number> {
-        return this.repo.count();
-    }
-
     countUnsent(): Promise<number> {
         return this.repo.createQueryBuilder('t').where('t.sent_at IS NULL').getCount();
     }
 
     // One UPDATE, so it is one transaction: either every confirmed id is marked or none.
     async markSent(eventIds: string[], sentAt: string): Promise<number> {
-        if (eventIds.length === 0) return 0;
-        const result = await this.repo.createQueryBuilder().update(TelemetryEventEntity)
-            .set({ sent_at: sentAt })
-            .where('event_id IN (:...ids)', { ids: eventIds })
-            .andWhere('sent_at IS NULL')
-            .execute();
-        return result.affected ?? 0;
+        return (await this.markSentMeasured(eventIds, sentAt)).count;
+    }
+
+    // markSent, plus the estimated bytes those rows took while unsent.
+    async markSentMeasured(eventIds: string[], sentAt: string): Promise<{ count: number; bytes: number }> {
+        if (eventIds.length === 0) return { count: 0, bytes: 0 };
+        // Bytes as they were before sent_at was set, to match what insert() counted.
+        const rows = await this.database.query(
+            `UPDATE "telemetry_event" SET "sent_at" = ? WHERE "event_id" IN (${eventIds.map(() => '?').join(', ')}) AND "sent_at" IS NULL `
+            + `RETURNING ${ROW_BYTES} - LENGTH("sent_at") AS "bytes"`,
+            [sentAt, ...eventIds],
+        ) as Array<{ bytes: number }>;
+        return { count: rows.length, bytes: rows.reduce((sum, r) => sum + Number(r.bytes), 0) };
+    }
+
+    // Unsent rows, quarantined included. A full scan: for start-up and the daily resync.
+    async unsentTotals(): Promise<{ count: number; bytes: number }> {
+        const row = (await this.database.query(
+            `SELECT COUNT(*) AS "count", COALESCE(SUM(${ROW_BYTES}), 0) AS "bytes" FROM "telemetry_event" WHERE "sent_at" IS NULL`,
+        ))[0] as { count: number; bytes: number };
+        return { count: Number(row.count), bytes: Number(row.bytes) };
+    }
+
+    // Bytes the whole database file holds in live pages. Constant time.
+    async databaseBytes(): Promise<number> {
+        const [pages] = await this.database.query('PRAGMA page_count') as Array<{ page_count: number }>;
+        const [free] = await this.database.query('PRAGMA freelist_count') as Array<{ freelist_count: number }>;
+        const [size] = await this.database.query('PRAGMA page_size') as Array<{ page_size: number }>;
+        return (Number(pages.page_count) - Number(free.freelist_count)) * Number(size.page_size);
+    }
+
+    // Gives free pages back to the file system (with auto_vacuum = INCREMENTAL).
+    // incremental_vacuum frees one page per step, and a plain query takes one step, so
+    // this goes through better-sqlite3's pragma(), which steps it to the end. One
+    // synchronous call: nothing can interleave with it.
+    async reclaimFreePages(): Promise<void> {
+        const native = (this.database.driver as unknown as { databaseConnection: { pragma(source: string): unknown } }).databaseConnection;
+        native.pragma('incremental_vacuum');
     }
 
     async quarantine(eventIds: string[], reason: string, at: string): Promise<number> {
@@ -113,14 +148,6 @@ export class TelemetryRepository {
             // Written order, not event_id: the clock may have jumped since.
             .orderBy('t.seq', 'DESC')
             .getOne();
-    }
-
-    async sizes(): Promise<{ total_bytes: number; unsent_bytes: number }> {
-        const result = await this.repo.createQueryBuilder('t')
-            .select(`COALESCE(SUM(${ROW_BYTES}), 0)`, 'total')
-            .addSelect(`COALESCE(SUM(CASE WHEN sent_at IS NULL THEN ${ROW_BYTES} ELSE 0 END), 0)`, 'unsent')
-            .getRawOne<{ total: number; unsent: number }>();
-        return { total_bytes: Number(result?.total ?? 0), unsent_bytes: Number(result?.unsent ?? 0) };
     }
 
     async deleteSentBefore(cutoff: string): Promise<number> {

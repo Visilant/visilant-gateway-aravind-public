@@ -6,6 +6,7 @@ import { TelemetryEventEntity } from '../src/infrastructure/database/entities';
 import { SettingRepository, TelemetryRepository } from '../src/infrastructure/database/repositories';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
 import pkg from '../package.json';
+import { openOutbox } from './fixtures/outbox';
 import { v7 as uuidv7 } from 'uuid';
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -14,8 +15,9 @@ let config: GatewayConfig;
 
 function lifecycle(): TelemetryLifecycle {
     const repository = new TelemetryRepository(database);
-    const telemetry = new TelemetryService(config, logger as never, repository, new SettingRepository(database), { kick: jest.fn() } as never, { acceptsDeviceHealth: () => true } as never);
-    return new TelemetryLifecycle(config, logger as never, telemetry, repository);
+    const outbox = openOutbox();
+    const telemetry = new TelemetryService(config, logger as never, repository, new SettingRepository(database), { kick: jest.fn() } as never, outbox as never);
+    return new TelemetryLifecycle(config, logger as never, telemetry, repository, outbox as never);
 }
 const events = () => database.getRepository(TelemetryEventEntity).find({ order: { event_id: 'ASC' } });
 const types = async () => (await events()).map(e => e.type);

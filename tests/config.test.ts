@@ -151,6 +151,17 @@ describe('loadConfig', () => {
             expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, siteid: 'x' } }))).toThrow(/siteid/);
         });
 
+        it('defaults the second unsent cap and the free-disk floor', () => {
+            const config = loadConfig(writeConfig({ ...VALID, telemetry: TELEMETRY }));
+            expect(config.telemetry.max_unsent_mb).toBe(400);
+            expect(config.telemetry.min_free_disk_mb).toBe(1024);
+        });
+
+        it('rejects a max_unsent_mb below max_outbox_mb', () => {
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, max_outbox_mb: 300, max_unsent_mb: 200 } }))).toThrow(/telemetry\.max_unsent_mb/);
+            expect(loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, max_outbox_mb: 300, max_unsent_mb: 300 } })).telemetry.max_unsent_mb).toBe(300);
+        });
+
         it('rejects non-positive caps', () => {
             expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, max_outbox_mb: 0 } }))).toThrow(/telemetry\.max_outbox_mb/);
             expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, retention_days: 0 } }))).toThrow(/telemetry\.retention_days/);

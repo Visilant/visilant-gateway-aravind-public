@@ -172,20 +172,43 @@ central ignores them.
 
 ## Outbox size
 
-`TelemetryOutbox` prunes at start-up and every 10 minutes.
+`TelemetryOutbox` bounds the outbox without deleting anything central has not
+confirmed, and decides what may still be written.
+
+**Pruning**, at start-up and every 10 minutes:
 
 - Sent rows with `occurred_at` older than `telemetry.retention_days` (90) are deleted.
-- While the table is over `telemetry.max_outbox_mb` (200), sent rows are deleted oldest
-  first. The size is estimated from the stored text plus 200 bytes a row.
-- **Unsent rows are never deleted.**
-- If unsent rows alone are over the cap, the gateway logs one error and stops storing new
-  `device.health` events. Their ids come back in `dropped`. Every other type is still
-  stored. When the backlog is confirmed and pruned, the log says so and `device.health`
-  is stored again.
+- While the database file holds more than `telemetry.max_outbox_mb` (200) in live pages,
+  sent rows are deleted oldest first. The size is the file's real size (`page_count`
+  minus `freelist_count`, times `page_size`), so captures' own rows count towards it too;
+  they are small.
+- The freed pages are given back to the disk with `PRAGMA incremental_vacuum`. A
+  database created before this release is switched to incremental vacuum once, at
+  start-up, with one `VACUUM`; that is skipped (and retried at the next start) when the
+  disk lacks twice the file's size plus 1 GB free.
+- **Unsent rows are never deleted**, quarantined ones included.
 
-At one heartbeat a minute, 12 health samples per phone an hour and a few events per
-capture, the cap is reached only after a long outage. Central's offline alert
-(no heartbeat for 24 h) should fire long before that.
+**What is still written** depends on the unsent rows' estimated size (their text plus
+200 bytes a row). It is kept as a running total as rows are written and confirmed, read
+from the table at start-up and checked against it once a day, so no request counts the
+table.
+
+| Unsent rows | Stored | Refused (their ids come back in `dropped`) |
+| --- | --- | --- |
+| Up to `max_outbox_mb` (200) | Everything | Nothing |
+| Over `max_outbox_mb` | Signed-in crash, capture, YOLO and operation events; `ai.assessed`; the gateway lifecycle | Everything sent without sign-in; `device.health` |
+| Over `max_unsent_mb` (400) | The gateway lifecycle (`gateway.*`) only | Every phone event; `ai.assessed` |
+
+Each step up is logged once as an error, and the way back down once as info.
+
+**Free disk.** Every minute the gateway checks the free space on the disks of the
+database and of `storage_root`. Below `telemetry.min_free_disk_mb` (1024) nothing at all
+is stored, lifecycle rows included, so captures always have room. This is logged once,
+and again when space returns.
+
+So the unsigned path can add at most about `max_outbox_mb` of unsent rows, and phones
+together at most about `max_unsent_mb`; the lifecycle adds about 0.5 MB a day after that.
+Central's offline alert (no heartbeat for 24 h) should fire long before either cap.
 
 ## Export for a site that stays offline
 

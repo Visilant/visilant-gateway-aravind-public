@@ -5,6 +5,7 @@ import type { TelemetryEventDto } from '../src/application/dto';
 import { SettingRepository, TelemetryRepository } from '../src/infrastructure/database/repositories';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
 import { phoneEvent } from './fixtures/telemetry';
+import { openOutbox } from './fixtures/outbox';
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 const push = { kick: jest.fn().mockResolvedValue(undefined) };
@@ -15,7 +16,7 @@ beforeEach(async () => {
     database = new DataSource(buildDataSourceOptions(':memory:'));
     await database.initialize(); await database.runMigrations();
     config = Object.assign(new GatewayConfig(), { telemetry: Object.assign(new TelemetryConfig(), { enabled: true, site_id: 'VC1' }) });
-    service = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never, { acceptsDeviceHealth: () => true } as never);
+    service = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never, openOutbox() as never);
 });
 afterEach(() => database.destroy());
 
@@ -40,7 +41,7 @@ test('a batch of only duplicates does not trigger a push', async () => {
 
 test('gateway_id is generated once and survives a new service instance', async () => {
     const first = await service.gatewayId();
-    const again = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never, { acceptsDeviceHealth: () => true } as never);
+    const again = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never, openOutbox() as never);
     expect(await again.gatewayId()).toBe(first);
 });
 

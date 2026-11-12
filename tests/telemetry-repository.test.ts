@@ -73,16 +73,23 @@ test('newestLifecycle finds the newest gateway start, heartbeat or stop, ignorin
     expect((await repository.newestLifecycle())?.event_id).toBe(heartbeat.event_id);
 });
 
-test('sizes estimates total and unsent bytes from the stored text', async () => {
-    const empty = await repository.sizes();
-    expect(empty).toEqual({ total_bytes: 0, unsent_bytes: 0 });
+test('insert and markSentMeasured report the bytes that unsentTotals counts', async () => {
+    expect(await repository.unsentTotals()).toEqual({ count: 0, bytes: 0 });
     const big = row({ payload: JSON.stringify({ x: 'y'.repeat(10_000) }) });
-    await repository.insertOrIgnore([big, row()]);
-    await repository.markSent([big.event_id], new Date().toISOString());
-    const sizes = await repository.sizes();
-    expect(sizes.total_bytes).toBeGreaterThan(10_000);
-    expect(sizes.unsent_bytes).toBeLessThan(1_000);
-    expect(sizes.unsent_bytes).toBeGreaterThan(0);
+    const small = row();
+    const { inserted, bytes } = await repository.insert([big, small, { ...small }]);
+    expect(inserted).toEqual([true, true, false]);
+    expect(await repository.unsentTotals()).toEqual({ count: 2, bytes });
+    const marked = await repository.markSentMeasured([big.event_id], new Date().toISOString());
+    expect(marked.count).toBe(1);
+    expect(marked.bytes).toBeGreaterThan(10_000);
+    expect(await repository.unsentTotals()).toEqual({ count: 1, bytes: bytes - marked.bytes });
+});
+
+test('databaseBytes follows the live pages of the file', async () => {
+    const before = await repository.databaseBytes();
+    await repository.insertOrIgnore(Array.from({ length: 20 }, () => row({ payload: JSON.stringify({ x: 'y'.repeat(10_000) }) })));
+    expect(await repository.databaseBytes()).toBeGreaterThan(before + 150_000);
 });
 
 test('deleteSentBefore removes only sent rows that occurred before the cutoff', async () => {

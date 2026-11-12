@@ -7,6 +7,7 @@ import { CaptureEntity, CaptureStatus, SettingEntity, TelemetryEventEntity } fro
 import { CaptureRepository, SettingRepository, TelemetryRepository } from '../src/infrastructure/database/repositories';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
 import { phoneEvent } from './fixtures/telemetry';
+import { openOutbox } from './fixtures/outbox';
 
 // TypeORM's better-sqlite3 driver has one connection. Two explicit transactions open at
 // once collide, and the capture queue's claimDue is one of them. Telemetry writes come
@@ -15,7 +16,7 @@ import { phoneEvent } from './fixtures/telemetry';
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 let database: DataSource, config: GatewayConfig, telemetry: TelemetryService, captures: CaptureRepository;
 const events = (n: number) => Array.from({ length: n }, () => phoneEvent('device.health') as unknown as TelemetryEventDto);
-const outbox = { accepts: () => true, acceptsDeviceHealth: () => true, inserted: jest.fn(), unsentCount: () => 0 };
+const outbox = openOutbox();
 
 function capture(id: string): CaptureEntity {
     return Object.assign(new CaptureEntity(), {

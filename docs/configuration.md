@@ -52,7 +52,9 @@ records and how the push works: [telemetry.md](telemetry.md).
 | `telemetry.site_id` | Required when `enabled` is `true`: the vision centre ID, 1 to 64 letters, digits, `_` or `-`. Every record carries it. The gateway will not start with telemetry on and no `site_id`. |
 | `telemetry.central_url` | The central receiver, `http` or `https`, without `/v1/telemetry/batch`. Set it together with `central_token`. Without both, nothing is pushed and rows wait in the outbox. |
 | `telemetry.central_token` | This gateway's bearer token for central. Shown as `(set)` by `GET /system/config`. |
-| `telemetry.max_outbox_mb` | `200`. Above this, sent rows are deleted oldest first. Unsent rows are never deleted; if they alone pass it, new `device.health` events are dropped. |
+| `telemetry.max_outbox_mb` | `200`. While the database file is larger, sent rows are deleted oldest first. Unsent rows are never deleted; once they alone pass it, events sent without sign-in and `device.health` are dropped. |
+| `telemetry.max_unsent_mb` | `400`, at least `max_outbox_mb`. Once unsent rows pass it, only the gateway's own lifecycle events are stored. |
+| `telemetry.min_free_disk_mb` | `1024`. With less free disk than this, no telemetry is stored, so captures keep room. |
 | `telemetry.retention_days` | `90`. Sent rows older than this are deleted. |
 
 The `gateway_id` that tells apart two gateways at one site is generated, not configured:

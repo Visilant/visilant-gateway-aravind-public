@@ -13,8 +13,12 @@ import {
     Matches,
     MaxLength,
     Min,
+    Validate,
     ValidateIf,
     ValidateNested,
+    ValidatorConstraint,
+    type ValidationArguments,
+    type ValidatorConstraintInterface,
 } from 'class-validator';
 
 export type Retention = 'DELETE_ON_SENT' | 'KEEP';
@@ -70,6 +74,14 @@ export class MwlNodeConfig extends DicomNodeConfig {
     scheduled_station_ae?: string;
 }
 
+@ValidatorConstraint({ name: 'atLeastOutboxCap', async: false })
+class AtLeastOutboxCap implements ValidatorConstraintInterface {
+    validate(value: unknown, args: ValidationArguments): boolean {
+        return typeof value === 'number' && value >= (args.object as TelemetryConfig).max_outbox_mb;
+    }
+    defaultMessage(): string { return 'max_unsent_mb must be at least max_outbox_mb'; }
+}
+
 // Telemetry from phones and from the gateway itself, kept in a SQLite outbox and pushed
 // to the central store. See docs/telemetry.md. Off unless a site turns it on.
 export class TelemetryConfig {
@@ -102,6 +114,19 @@ export class TelemetryConfig {
     @IsNumber()
     @IsPositive()
     max_outbox_mb: number = 200;
+
+    // The second, higher cap on unsent rows. Past max_outbox_mb, unsigned rows and
+    // device.health are refused; past this, everything but the gateway's own lifecycle.
+    @IsNumber()
+    @IsPositive()
+    @Validate(AtLeastOutboxCap)
+    max_unsent_mb: number = 400;
+
+    // Below this much free disk the gateway stores no telemetry at all, so captures
+    // always have room.
+    @IsNumber()
+    @Min(0)
+    min_free_disk_mb: number = 1024;
 
     @IsInt()
     @IsPositive()

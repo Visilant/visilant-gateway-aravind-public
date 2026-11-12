@@ -154,10 +154,12 @@ Look for these in the gateway log. Details: [telemetry.md](telemetry.md).
 - **`telemetry push failed: could not reach central (ENOTFOUND)`**, `ECONNREFUSED` or
   `TIMEOUT`. The gateway has no internet, or `telemetry.central_url` is wrong. Nothing is
   lost; the gateway retries every few minutes, at most every 30 minutes.
-- **`telemetry outbox: unsent events alone are over telemetry.max_outbox_mb`**. Central has
-  not confirmed anything for a long time. New `device.health` events are dropped; all
-  other events are kept. Fix the connection, or download `GET /telemetry/export` as an
-  admin and send the file to support.
+- **`telemetry outbox: unsent events are over telemetry.max_outbox_mb`** (or
+  `max_unsent_mb`). Central has not confirmed anything for a long time. Some events are
+  being dropped; see [telemetry.md](telemetry.md#outbox-size). Fix the connection, or
+  download `GET /telemetry/export` as an admin and send the file to support.
+- **`telemetry: less than 1024 MB free on the gateway's disk`**. No telemetry is stored
+  until there is more space. Captures are not affected, but free disk space soon.
 - **`the previous run ended without a clean shutdown`**. A warning, not a fault: the
   gateway lost power or was killed. It is recorded as `gateway.unclean_shutdown`.
 

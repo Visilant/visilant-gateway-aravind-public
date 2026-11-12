@@ -3,6 +3,7 @@ import type { GatewayConfig } from '../../config';
 import { TelemetryRepository } from '../../infrastructure/database/repositories';
 import type { Logger } from '../../infrastructure/logger';
 import { CONFIG, LOGGER } from '../../tokens';
+import { TelemetryOutbox } from './TelemetryOutbox';
 import { TelemetryService } from './TelemetryService';
 import pkg from '../../../package.json';
 
@@ -21,6 +22,7 @@ export class TelemetryLifecycle {
         @Inject(LOGGER) private readonly logger: Logger,
         private readonly telemetry: TelemetryService,
         private readonly repository: TelemetryRepository,
+        private readonly outbox: TelemetryOutbox,
     ) {}
 
     async start(): Promise<void> {
@@ -65,7 +67,7 @@ export class TelemetryLifecycle {
         return {
             gateway_version: pkg.version,
             uptime_s: Math.round(process.uptime()),
-            outbox_backlog: this.config.telemetry.enabled ? await this.repository.countUnsent() : 0,
+            outbox_backlog: this.outbox.unsentCount(),
         };
     }
 }

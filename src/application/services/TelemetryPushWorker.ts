@@ -5,6 +5,7 @@ import type { TelemetryEventEntity } from '../../infrastructure/database';
 import type { Logger } from '../../infrastructure/logger';
 import { CentralClient, CentralPushError } from '../../infrastructure/telemetry';
 import { CONFIG, LOGGER } from '../../tokens';
+import { TelemetryOutbox } from './TelemetryOutbox';
 import { toEnvelope } from './telemetryEnvelope';
 
 export const PUSH_BATCH_SIZE = 500;
@@ -43,6 +44,7 @@ export class TelemetryPushWorker {
         @Inject(LOGGER) private readonly logger: Logger,
         private readonly repository: TelemetryRepository,
         private readonly central: CentralClient,
+        private readonly outbox: TelemetryOutbox,
     ) {}
 
     private get configured(): boolean {
@@ -128,7 +130,9 @@ export class TelemetryPushWorker {
         }
         const confirmed = new Set(returned);
         const now = new Date().toISOString();
-        const sent = await this.repository.markSent(rows.filter((row) => confirmed.has(row.event_id)).map((row) => row.event_id), now);
+        const marked = await this.repository.markSentMeasured(rows.filter((row) => confirmed.has(row.event_id)).map((row) => row.event_id), now);
+        this.outbox.confirmed(marked);
+        const sent = marked.count;
         const left = rows.filter((row) => !confirmed.has(row.event_id)).map((row) => row.event_id);
         const quarantined = await this.repository.recordUnconfirmed(left, MAX_UNCONFIRMED_ATTEMPTS, now);
         return { sent, quarantined };

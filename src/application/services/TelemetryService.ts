@@ -87,9 +87,9 @@ export class TelemetryService {
         const gatewayId = await this.gatewayId();
         const receivedAt = new Date().toISOString();
         const result: TelemetryIngestResultDto = { accepted: [], duplicate: [], dropped: [] };
-        // The outbox is full of rows central has not confirmed: shed device.health only.
-        const kept = this.outbox.acceptsDeviceHealth() ? events : events.filter((event) => {
-            if (event.type !== 'device.health') return true;
+        // The outbox is over a cap, or the disk is short: what it refuses is dropped.
+        const kept = events.filter((event) => {
+            if (this.outbox.accepts(event.type, authenticated)) return true;
             result.dropped.push(event.event_id);
             return false;
         });
@@ -110,12 +110,13 @@ export class TelemetryService {
             sent_at: null,
         }));
 
-        const inserted = await this.repository.insertOrIgnore(rows);
+        const { inserted, bytes } = await this.repository.insert(rows);
+        this.outbox.inserted(inserted.filter(Boolean).length, bytes);
         rows.forEach((row, i) => (inserted[i] ? result.accepted : result.duplicate).push(row.event_id));
 
         // A full batch is waiting: send now instead of at the next minute. Not awaited,
         // so the phone's answer never waits on the internet.
-        if (result.accepted.length > 0 && await this.repository.countUnsent() >= PUSH_BATCH_SIZE) {
+        if (result.accepted.length > 0 && this.outbox.unsentCount() >= PUSH_BATCH_SIZE) {
             void this.push.kick().catch(() => undefined);
         }
         return result;
@@ -128,7 +129,7 @@ export class TelemetryService {
         payload: Record<string, unknown>,
         ids: { capture_id?: string | null; screening_id?: string | null } = {},
     ): Promise<string | null> {
-        if (!this.enabled) return null;
+        if (!this.enabled || !this.outbox.accepts(type, null)) return null;
         const now = new Date().toISOString();
         const row = Object.assign(new TelemetryEventEntity(), {
             event_id: uuidv7(),
@@ -146,7 +147,8 @@ export class TelemetryService {
             payload: JSON.stringify(payload),
             sent_at: null,
         });
-        await this.repository.insertOrIgnore([row]);
+        const { inserted, bytes } = await this.repository.insert([row]);
+        this.outbox.inserted(inserted.filter(Boolean).length, bytes);
         return row.event_id;
     }
 
