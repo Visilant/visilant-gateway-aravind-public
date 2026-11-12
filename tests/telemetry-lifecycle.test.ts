@@ -13,7 +13,7 @@ let config: GatewayConfig;
 
 function lifecycle(): TelemetryLifecycle {
     const repository = new TelemetryRepository(database);
-    const telemetry = new TelemetryService(config, logger as never, repository, new SettingRepository(database));
+    const telemetry = new TelemetryService(config, logger as never, repository, new SettingRepository(database), { kick: jest.fn() } as never);
     return new TelemetryLifecycle(config, logger as never, telemetry, repository);
 }
 const events = () => database.getRepository(TelemetryEventEntity).find({ order: { event_id: 'ASC' } });

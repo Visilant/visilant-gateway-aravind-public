@@ -8,7 +8,7 @@ import { loadConfig } from './config';
 import { createLogger } from './infrastructure/logger';
 import { createDatabase } from './infrastructure/database';
 import { CaptureRepository } from './infrastructure/database/repositories';
-import { DiagnosticsService, RetentionService, ScreeningExpiry, SyncWorker, SystemService, TelemetryLifecycle } from './application/services';
+import { DiagnosticsService, RetentionService, ScreeningExpiry, SyncWorker, SystemService, TelemetryLifecycle, TelemetryPushWorker } from './application/services';
 import { GatewayServer } from './presentation/server';
 import { CONFIG, DATABASE, LOGGER, RECORDER } from './tokens';
 import { WorklistSettingsService } from './application/services/WorklistSettingsService';
@@ -66,12 +66,15 @@ async function bootstrap(): Promise<void> {
     system.start();
     const expiry = Container.get(ScreeningExpiry);
     expiry.start();
+    const telemetryPush = Container.get(TelemetryPushWorker);
+    telemetryPush.start();
 
     const shutdown = (signal: string) => {
         logger.info(`${signal} received, shutting down`);
         worker.stop();
         system.stop();
         expiry.stop();
+        telemetryPush.stop();
         // gateway.stopped first: server.close can wait on idle phone connections until
         // the forced exit below, and without the row the next start reports a crash.
         void lifecycle.stop().finally(() => server.close(() => {

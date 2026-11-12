@@ -5,6 +5,7 @@ import { TelemetryEventEntity } from '../../infrastructure/database';
 import { SettingRepository, TelemetryRepository } from '../../infrastructure/database/repositories';
 import type { Logger } from '../../infrastructure/logger';
 import { CONFIG, LOGGER } from '../../tokens';
+import { PUSH_BATCH_SIZE, TelemetryPushWorker } from './TelemetryPushWorker';
 import type { GatewayEventType, TelemetryEventDto, TelemetryIngestResultDto } from '../dto';
 
 const GATEWAY_ID_KEY = 'telemetry.gateway_id';
@@ -21,6 +22,7 @@ export class TelemetryService {
         @Inject(LOGGER) private readonly logger: Logger,
         private readonly repository: TelemetryRepository,
         private readonly settings: SettingRepository,
+        private readonly push: TelemetryPushWorker,
     ) {}
 
     get enabled(): boolean {
@@ -63,6 +65,12 @@ export class TelemetryService {
         const inserted = await this.repository.insertOrIgnore(rows);
         const result: TelemetryIngestResultDto = { accepted: [], duplicate: [], dropped: [] };
         rows.forEach((row, i) => (inserted[i] ? result.accepted : result.duplicate).push(row.event_id));
+
+        // A full batch is waiting: send now instead of at the next minute. Not awaited,
+        // so the phone's answer never waits on the internet.
+        if (result.accepted.length > 0 && await this.repository.countUnsent() >= PUSH_BATCH_SIZE) {
+            void this.push.kick().catch(() => undefined);
+        }
         return result;
     }
 
