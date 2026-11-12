@@ -168,8 +168,9 @@ capture_id?, screening_id?, payload }`. `event_id` is a lowercase UUIDv7 made by
 phone. The gateway adds `received_at`, `site_id` and `gateway_id`.
 
 - `accepted`: stored now. `duplicate`: the gateway already had this `event_id` (a retry);
-  nothing changed. `dropped`: a `device.health` event not stored because the outbox is
-  full of unsent rows. The phone treats all three as delivered and does not resend.
+  nothing changed. `dropped`: not stored because the gateway's outbox is over a cap or
+  its disk is short ([telemetry.md](telemetry.md#outbox-size)). The phone treats all
+  three as delivered and does not resend.
 - 400 means the whole request was rejected and nothing from it was stored. `details` is
   a list of `{ event, field, reason }`: the index of the failing event (null for the batch
   itself), the field path in our own names, and `unknown_key`, `missing` or `invalid`. It

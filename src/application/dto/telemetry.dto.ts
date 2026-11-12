@@ -261,7 +261,7 @@ export class TelemetryBatchDto {
 export class TelemetryIngestResultDto {
     accepted!: string[];
     duplicate!: string[];
-    // Not stored because the outbox is full of unsent rows (device.health only).
+    // Not stored because the outbox is over a cap or the disk is short. See TelemetryOutbox.
     dropped!: string[];
 }
 
