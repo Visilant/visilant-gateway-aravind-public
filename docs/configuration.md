@@ -28,6 +28,7 @@ and use `"scheduled_station_ae": "VISILANT"`. See [development.md](development.m
 | `screening_expiry_days` | `7`; release a screening that cannot finish (images missing or a capture `FAILED`) after this many days with no activity, so its order returns to the worklist. Nothing is deleted. `0` disables expiry. |
 | `mwl` | Required DICOM worklist connection. |
 | `store` | Required DICOM archive connection. |
+| `telemetry` | Optional; off when absent. See [Telemetry](#telemetry). |
 
 Each DICOM connection requires `host`, positive integer `port`, `called_ae` (the remote
 AE), and `calling_ae` (this gateway). AE titles are limited to 16 characters.
@@ -39,6 +40,23 @@ unfiltered-worklist warning at start-up. How to choose: [worklist.md](worklist.m
 - `requested_procedure_id`: Requested Procedure ID (0040,1001), when the HIS uses one fixed code for this exam type.
 - `modality`: Modality (0008,0060) in the scheduled step, for example `OP`; omit to match any modality.
 - `scheduled_station_ae`: Scheduled Station AE Title (0040,0001); limits results to orders scheduled for this device.
+
+## Telemetry
+
+Phone and gateway telemetry, kept in SQLite and pushed to the central store. What it
+records and how the push works: [telemetry.md](telemetry.md).
+
+| Key | Default / purpose |
+| --- | --- |
+| `telemetry.enabled` | `false`. Off: `POST /telemetry/events` answers 204 and stores nothing, the gateway writes no events of its own, and nothing is pushed. |
+| `telemetry.site_id` | Required when `enabled` is `true`: the vision centre ID, 1 to 64 letters, digits, `_` or `-`. Every record carries it. The gateway will not start with telemetry on and no `site_id`. |
+| `telemetry.central_url` | The central receiver, `http` or `https`, without `/v1/telemetry/batch`. Set it together with `central_token`. Without both, nothing is pushed and rows wait in the outbox. |
+| `telemetry.central_token` | This gateway's bearer token for central. Shown as `(set)` by `GET /system/config`. |
+| `telemetry.max_outbox_mb` | `200`. Above this, sent rows are deleted oldest first. Unsent rows are never deleted; if they alone pass it, new `device.health` events are dropped. |
+| `telemetry.retention_days` | `90`. Sent rows older than this are deleted. |
+
+The `gateway_id` that tells apart two gateways at one site is generated, not configured:
+it is kept in the database (`setting` key `telemetry.gateway_id`).
 
 ## Change worklist filters in the dashboard
 

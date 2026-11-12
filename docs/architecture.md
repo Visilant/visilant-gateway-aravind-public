@@ -61,7 +61,7 @@ database (`src/tokens.ts`).
 
 | Path | What is there |
 |---|---|
-| `src/index.ts` | Start-up: load config, open the database and run migrations, recover interrupted sends, start the HTTP server and the timers |
+| `src/index.ts` | Start-up: load config, open the database and run migrations, recover interrupted sends, record telemetry start-up, start the HTTP server and the timers |
 | `src/config/` | `config.json` schema and loader. The process will not start with an invalid config |
 | `src/domain/assessment.ts` | Format of the optional AI result that the phone sends |
 | `src/application/dto/` | Request and response shapes, with validation rules |
@@ -71,6 +71,7 @@ database (`src/tokens.ts`).
 | `src/infrastructure/storage/` | Where `.dcm` files are written on disk |
 | `src/infrastructure/image/jpeg.ts` | Reads the JPEG header (baseline or progressive, EXIF rotation) |
 | `src/infrastructure/diagnostics/` | Optional timing recorder used for performance investigation |
+| `src/infrastructure/telemetry/` | HTTP client for the central telemetry store |
 | `src/presentation/` | HTTP server, controllers, error handling, the operator web page (`ui/`) |
 | `src/setup/` | Windows setup wizard on port 8081 and the launcher that supervises the gateway |
 | `src/cli/manage-users.ts` | `npm run users` |
@@ -93,6 +94,10 @@ database (`src/tokens.ts`).
 | `AuthService`, `SecretService` | Sign-in, JWT tokens, signing secrets stored in SQLite |
 | `DicomPreviewService` | Preview image and tags for the operator page |
 | `SetupVerificationService` | Records the steps of the setup wizard |
+| `TelemetryService` | Writes phone telemetry and the gateway's own events into the `telemetry_event` outbox; export. See [telemetry.md](telemetry.md) |
+| `TelemetryLifecycle` | `gateway.started`, a heartbeat every minute, `gateway.stopped`, and `gateway.unclean_shutdown` after a power cut |
+| `TelemetryPushWorker` | Every minute, pushes unsent telemetry to central, with exponential back-off |
+| `TelemetryOutbox` | Every 10 minutes, deletes sent telemetry past the size or age cap; never an unsent row |
 
 ## A worklist request
 
