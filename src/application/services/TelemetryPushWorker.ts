@@ -11,7 +11,7 @@ const INTERVAL_MS = 60_000;
 const BACKOFF_BASE_MS = 60_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
 
-// Pushes the telemetry outbox to central, the same way SyncWorker drains the capture
+// Pushes the telemetry outbox to central, in the order rows were written, the same way SyncWorker drains the capture
 // queue: an in-process timer with an overlap guard.
 //
 // A row is marked sent only when central returns its event_id, and the marks for one
@@ -70,7 +70,7 @@ export class TelemetryPushWorker {
         let sent = 0;
         try {
             for (;;) {
-                const batch = await this.repository.findUnsent(PUSH_BATCH_SIZE);
+                const batch = await this.repository.findPushable(PUSH_BATCH_SIZE);
                 if (batch.length === 0) break;
                 const returned = new Set(await this.central.pushBatch(central_url as string, central_token as string, batch.map(toEnvelope)));
                 const confirmed = batch.filter((row) => returned.has(row.event_id)).map((row) => row.event_id);

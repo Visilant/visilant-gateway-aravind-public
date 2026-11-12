@@ -161,7 +161,7 @@ pushes them to central. Event types, fields and the push are in
 | Method | Path | Input / result |
 | --- | --- | --- |
 | `POST` | `/telemetry/events` | Token optional; see below. JSON `{ "events": [ <event>, ... ] }`, 1 to 100 events and at most 256 KB; over either is 413. Returns `{ "data": { "accepted": [...], "duplicate": [...], "dropped": [...] } }`, each a list of `event_id`. With telemetry off: 204, no body, nothing stored. |
-| `GET` | `/telemetry/export` | ADMIN. Optional `since=<event_id>`. NDJSON (`application/x-ndjson`) of the unsent rows after `since`, one envelope per line. |
+| `GET` | `/telemetry/export` | ADMIN. Optional `since=<event_id>`. NDJSON (`application/x-ndjson`) of the unsent rows written after that event, one envelope per line. 400 when `since` is not in the outbox. |
 
 Each event is `{ event_id, schema_version, type, occurred_at, device_id, session_id,
 capture_id?, screening_id?, payload }`. `event_id` is a lowercase UUIDv7 made by the

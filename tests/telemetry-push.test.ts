@@ -63,7 +63,7 @@ test('posts unsent rows in event_id order to /v1/telemetry/batch with the gatewa
     expect(requests[0]).toMatchObject({ method: 'POST', url: '/v1/telemetry/batch', authorization: 'Bearer SYNTHETIC-TOKEN' });
     expect(requests[0].body.events.map((e: { event_id: string }) => e.event_id)).toEqual([a.event_id, b.event_id]);
     // The same envelope as everywhere else, with the payload as an object. sent_at never leaves.
-    const { sent_at: _s, ...envelope } = a;
+    const { sent_at: _s, seq: _q, push_attempts: _p, quarantined_at: _qa, quarantine_reason: _qr, ...envelope } = a;
     expect(requests[0].body.events[0]).toEqual({ ...envelope, payload: { battery_pct: 50 } });
     expect(await unsent()).toBe(0);
 });

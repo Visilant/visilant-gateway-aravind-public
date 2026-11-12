@@ -12,6 +12,13 @@ import { PRE_SIGN_IN_EVENT_TYPES, type GatewayEventType, type TelemetryEventDto,
 
 const GATEWAY_ID_KEY = 'telemetry.gateway_id';
 
+// GET /telemetry/export?since= names an event this outbox does not hold.
+export class TelemetryCursorNotFoundError extends Error {
+    constructor() {
+        super('since is not an event in this outbox (it may have been sent and pruned); omit since for a full export');
+    }
+}
+
 // A batch without a valid token carried a type that needs a signed-in phone.
 export class TelemetrySignInRequiredError extends Error {
     constructor(readonly eventType: string) {
@@ -136,14 +143,27 @@ export class TelemetryService {
     // Unsent rows after `since`, one NDJSON line each, read a page at a time so a long
     // backlog is never held in memory. For a site whose internet is down for long: a
     // support person uploads the file to central, which ignores what it already has.
-    async *exportUnsent(since: string | null): AsyncGenerator<string> {
-        let cursor = since;
+    // `since` is an event_id; the rows returned are the ones written after it, whatever
+    // their clocks say.
+    // The cursor is resolved before anything is streamed, so a bad one is a 400.
+    async exportUnsent(since: string | null): Promise<AsyncGenerator<string>> {
+        let cursor = 0;
+        if (since) {
+            const seq = await this.repository.seqOf(since);
+            if (seq === null) throw new TelemetryCursorNotFoundError();
+            cursor = seq;
+        }
+        return this.pages(cursor);
+    }
+
+    private async *pages(after: number): AsyncGenerator<string> {
+        let cursor = after;
         for (;;) {
             const page = await this.repository.findUnsent(EXPORT_PAGE, cursor);
             if (page.length === 0) return;
             yield page.map((row) => JSON.stringify(toEnvelope(row)) + '\n').join('');
             if (page.length < EXPORT_PAGE) return;
-            cursor = page[page.length - 1].event_id;
+            cursor = page[page.length - 1].seq;
         }
     }
 

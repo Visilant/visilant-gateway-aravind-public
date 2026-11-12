@@ -60,8 +60,12 @@ gateway sets), in SQLite, in the push to central and in the export.
 | `authenticated` | boolean or null | Gateway | `true` when the phone's request carried a valid token, `false` when it did not. Null for the gateway's own events. |
 | `payload` | object | Producer | The type's own fields. Stored as JSON text. |
 
-The SQLite table `telemetry_event` also has `sent_at`, set when central confirms the row.
-It never leaves the gateway.
+The SQLite table `telemetry_event` also has outbox bookkeeping that never leaves the
+gateway: `seq`, the order rows were written (an `AUTOINCREMENT` key, never reused);
+`sent_at`, set when central confirms the row; and `push_attempts`, `quarantined_at` and
+`quarantine_reason` (see [Push to central](#push-to-central)). Clocks on phones and on
+this computer can be wrong, so the push, the export cursor and unclean-shutdown
+detection all follow `seq`, never a timestamp or `event_id`.
 
 ## Before sign-in
 
@@ -115,17 +119,18 @@ The phone may not send these types.
 | `gateway.started` | Start-up | `gateway_version`, `uptime_s`, `outbox_backlog` (unsent rows) |
 | `gateway.heartbeat` | Every 60 s | Same as `gateway.started` |
 | `gateway.stopped` | Clean shutdown | Same as `gateway.started` |
-| `gateway.unclean_shutdown` | Start-up, when the newest of the three rows above is not `gateway.stopped` | `last_heartbeat_at`, `restarted_at`, `downtime_s` |
+| `gateway.unclean_shutdown` | Start-up, when the last of the three rows above to be written is not `gateway.stopped` | `last_heartbeat_at`, `restarted_at`, `downtime_s` |
 | `ai.assessed` | `POST /captures` with a valid `ai_assessment` | `gateway_capture_id`, `laterality`, `light`, `assessment` (the `AiAssessment` as received). `capture_id` is the phone's `Idempotency-Key`, or the gateway's capture ID when there was none. |
 
-A power cut in the first minute leaves `gateway.started` as the newest row, so that is
+A power cut in the first minute leaves `gateway.started` as the last row written, so that is
 also reported as an unclean shutdown. `last_heartbeat_at` is then the start time.
 
 ## Push to central
 
 `TelemetryPushWorker` runs every 60 s, and right away when 500 or more rows are unsent.
 
-1. Read up to 500 rows with `sent_at IS NULL`, in `event_id` order.
+1. Read up to 500 rows with `sent_at IS NULL` that are not quarantined, in the order
+   they were written.
 2. `POST <central_url>/v1/telemetry/batch` with `Authorization: Bearer <central_token>` and
    body `{ "events": [ <envelope>, ... ] }`. The envelope has the payload as an object
    and no `sent_at`. A path in `central_url` is kept: `https://host/ingest` posts to
@@ -165,8 +170,11 @@ capture, the cap is reached only after a long outage. Central's offline alert
 
 ## Export for a site that stays offline
 
-`GET /telemetry/export?since=<event_id>` (ADMIN) streams the unsent rows after `since`
-(or all of them) as NDJSON, one envelope per line, in `event_id` order. The file is
+`GET /telemetry/export?since=<event_id>` (ADMIN) streams the unsent rows written after
+the event `since` (or all of them) as NDJSON, one envelope per line, in the order they
+were written. A phone with a slow clock makes event_ids that sort earlier, so `since`
+follows write order, not the id. A `since` this outbox does not hold (for example one
+already sent and pruned) is 400: omit it for a full export. The file is
 named `telemetry-<site_id>-<UTC time>.ndjson`. A support person uploads it to central,
 which ingests it through the same dedup. When the internet returns, the normal push
 sends the same rows, central returns their ids, and only then are they marked sent.

@@ -11,6 +11,7 @@ import { AuthService } from '../src/application/services/AuthService';
 import { SettingEntity, TelemetryEventEntity, UserRole } from '../src/infrastructure/database/entities';
 import { GatewayConfig, TelemetryConfig } from '../src/config';
 import { DicomBuilder } from '../src/infrastructure/dicom';
+import { v7 as uuidv7 } from 'uuid';
 import { DEVICE_ID, PAYLOADS, SESSION_ID, phoneEvent } from './fixtures/telemetry';
 
 let server: Server, database: DataSource, directory: string, base: string, config: GatewayConfig;
@@ -268,7 +269,7 @@ describe('GET /telemetry/export', () => {
         expect((await exportRows('', 'OPERATOR')).status).toBe(403);
     });
 
-    test('streams unsent rows as NDJSON in the push envelope, in event_id order', async () => {
+    test('streams unsent rows as NDJSON in the push envelope, in the order they were written', async () => {
         const events = [phoneEvent('device.health'), phoneEvent('app.started'), phoneEvent('capture.taken')];
         await post({ events });
         const stored = await rows();
@@ -277,7 +278,7 @@ describe('GET /telemetry/export', () => {
         expect(response.status).toBe(200);
         expect(response.headers.get('content-type')).toMatch(/^application\/x-ndjson/);
         expect(response.headers.get('content-disposition')).toMatch(/^attachment; filename="telemetry-VC-SYNTH-01-\d{8}T\d{6}Z\.ndjson"$/);
-        const { sent_at: _s, ...first } = stored.find(r => r.event_id === events[0].event_id)!;
+        const { sent_at: _s, seq: _q, push_attempts: _a, quarantined_at: _qa, quarantine_reason: _qr, ...first } = stored.find(r => r.event_id === events[0].event_id)!;
         expect(response.lines.map(l => l.event_id)).toEqual([events[0].event_id, events[2].event_id]);
         expect(response.lines[0]).toEqual({ ...first, payload: events[0].payload });
         expect(response.text.endsWith('\n')).toBe(true);
@@ -287,6 +288,22 @@ describe('GET /telemetry/export', () => {
         const events = [phoneEvent('device.health'), phoneEvent('device.health'), phoneEvent('device.health')];
         await post({ events });
         expect((await exportRows(`?since=${events[0].event_id}`)).lines.map(l => l.event_id)).toEqual([events[1].event_id, events[2].event_id]);
+    });
+
+    // A phone whose clock is behind makes event_ids that sort before ones already
+    // stored. since means "written after", so those rows are not skipped.
+    test('since follows the order rows were stored, not the event_id clock', async () => {
+        const first = phoneEvent('device.health');
+        await post({ events: [first] });
+        const behind = phoneEvent('device.health', { event_id: uuidv7({ msecs: Date.now() - 86_400_000 }) });
+        await post({ events: [behind] });
+        expect((await exportRows(`?since=${first.event_id}`)).lines.map(l => l.event_id)).toEqual([behind.event_id]);
+    });
+
+    test('a since that is not in the outbox is 400, with what to do', async () => {
+        const response = await exportRows(`?since=${uuidv7()}`);
+        expect(response.status).toBe(400);
+        expect(JSON.parse(response.text).error).toMatch(/omit since/);
     });
 
     test('an empty outbox is an empty file', async () => {

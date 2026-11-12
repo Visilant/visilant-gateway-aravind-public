@@ -1,4 +1,4 @@
-import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
 // The telemetry outbox. One row per event, in the envelope that is also sent to central
 // and stored there, so data from every site combines by a plain union on event_id.
@@ -9,11 +9,19 @@ import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
 //
 // A row is deleted only after central has confirmed it (sent_at set).
 @Entity('telemetry_event')
-@Index('idx_telemetry_push', ['sent_at', 'event_id'])
+@Index('idx_telemetry_push', ['sent_at', 'quarantined_at', 'seq'])
 @Index('idx_telemetry_occurred', ['occurred_at'])
 export class TelemetryEventEntity {
-    // UUIDv7, set by the producer. Time-ordered, so it is also the push and export cursor.
-    @PrimaryColumn({ type: 'text' })
+    // Outbox only, never sent: the order rows were written. Clocks on phones and on this
+    // computer can be wrong, so the push, the export cursor and unclean-shutdown
+    // detection follow this, never a time. AUTOINCREMENT: never reused after a delete.
+    @PrimaryGeneratedColumn('increment', { type: 'integer' })
+    seq!: number;
+
+    // UUIDv7, set by the producer. The global key: the gateway and central ignore an
+    // event_id they already hold.
+    @Index('idx_telemetry_event_id', { unique: true })
+    @Column({ type: 'text' })
     event_id!: string;
 
     @Column({ type: 'integer' })
@@ -61,4 +69,16 @@ export class TelemetryEventEntity {
     // Outbox only, never sent: set when central confirms the event_id.
     @Column({ type: 'text', nullable: true })
     sent_at!: string | null;
+
+    // Outbox only: times central answered for this row without confirming it.
+    @Column({ type: 'integer', default: 0 })
+    push_attempts!: number;
+
+    // Outbox only: set when the push gives up on this row (central refused it alone, or
+    // never confirmed it). It is no longer pushed, but kept and exported.
+    @Column({ type: 'text', nullable: true })
+    quarantined_at!: string | null;
+
+    @Column({ type: 'text', nullable: true })
+    quarantine_reason!: string | null;
 }

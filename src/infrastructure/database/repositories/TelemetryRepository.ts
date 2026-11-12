@@ -43,11 +43,23 @@ export class TelemetryRepository {
         return rows.map((row) => fresh.delete(row.event_id));
     }
 
-    // Unsent rows in event_id order, optionally after a cursor.
-    findUnsent(limit: number, afterEventId: string | null = null): Promise<TelemetryEventEntity[]> {
-        const query = this.repo.createQueryBuilder('t').where('t.sent_at IS NULL');
-        if (afterEventId) query.andWhere('t.event_id > :after', { after: afterEventId });
-        return query.orderBy('t.event_id', 'ASC').limit(limit).getMany();
+    // The next rows to push: unsent and not quarantined, in the order they were written.
+    findPushable(limit: number): Promise<TelemetryEventEntity[]> {
+        return this.repo.createQueryBuilder('t')
+            .where('t.sent_at IS NULL').andWhere('t.quarantined_at IS NULL')
+            .orderBy('t.seq', 'ASC').limit(limit).getMany();
+    }
+
+    // Every unsent row, quarantined ones included, written after `afterSeq`.
+    findUnsent(limit: number, afterSeq = 0): Promise<TelemetryEventEntity[]> {
+        return this.repo.createQueryBuilder('t')
+            .where('t.sent_at IS NULL').andWhere('t.seq > :after', { after: afterSeq })
+            .orderBy('t.seq', 'ASC').limit(limit).getMany();
+    }
+
+    async seqOf(eventId: string): Promise<number | null> {
+        const row = await this.repo.findOne({ where: { event_id: eventId }, select: { seq: true } });
+        return row?.seq ?? null;
     }
 
     countAll(): Promise<number> {
@@ -69,12 +81,13 @@ export class TelemetryRepository {
         return result.affected ?? 0;
     }
 
-    // The newest gateway.started, heartbeat or stopped row.
+    // The last gateway.started, heartbeat or stopped row written.
     newestLifecycle(): Promise<TelemetryEventEntity | null> {
         return this.repo.createQueryBuilder('t')
             .where('t.type IN (:...types)', { types: LIFECYCLE })
             .andWhere('t.device_id IS NULL')
-            .orderBy('t.event_id', 'DESC')
+            // Written order, not event_id: the clock may have jumped since.
+            .orderBy('t.seq', 'DESC')
             .getOne();
     }
 
@@ -97,7 +110,7 @@ export class TelemetryRepository {
     // Sent rows only, oldest occurred_at first.
     async deleteOldestSent(limit: number): Promise<number> {
         const result = await this.repo.createQueryBuilder().delete().from(TelemetryEventEntity)
-            .where('event_id IN (SELECT event_id FROM telemetry_event WHERE sent_at IS NOT NULL ORDER BY occurred_at ASC, event_id ASC LIMIT :limit)', { limit })
+            .where('event_id IN (SELECT event_id FROM telemetry_event WHERE sent_at IS NOT NULL ORDER BY occurred_at ASC, seq ASC LIMIT :limit)', { limit })
             .execute();
         return result.affected ?? 0;
     }

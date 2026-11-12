@@ -38,18 +38,22 @@ test('the same event_id twice in one batch is stored once', async () => {
     expect(await repository.insertOrIgnore([a, { ...a }])).toEqual([true, false]);
 });
 
-test('findUnsent returns unsent rows in event_id order, up to the limit', async () => {
-    const rows = [row(), row(), row(), row()];
-    await repository.insertOrIgnore([rows[2], rows[0], rows[3], rows[1]]);
-    await repository.markSent([rows[1].event_id], new Date().toISOString());
-    expect((await repository.findUnsent(2)).map(r => r.event_id)).toEqual([rows[0].event_id, rows[2].event_id]);
+test('findPushable returns unsent, unquarantined rows in the order they were written, up to the limit', async () => {
+    const rows = [row(), row(), row(), row(), row()];
+    await repository.insertOrIgnore([rows[2], rows[0], rows[3], rows[1], rows[4]]);
+    await repository.markSent([rows[3].event_id], new Date().toISOString());
+    await database.query(`UPDATE telemetry_event SET quarantined_at = '2026-11-12T00:00:00.000Z', quarantine_reason = 'central_400' WHERE event_id = ?`, [rows[0].event_id]);
+    expect((await repository.findPushable(2)).map(r => r.event_id)).toEqual([rows[2].event_id, rows[1].event_id]);
 });
 
-test('findUnsent after a cursor pages through unsent rows only', async () => {
-    const rows = [row(), row(), row()];
+test('findUnsent after a cursor pages by write order and includes quarantined rows', async () => {
+    const rows = [row(), row(), row(), row()];
     await repository.insertOrIgnore(rows);
     await repository.markSent([rows[2].event_id], new Date().toISOString());
-    expect((await repository.findUnsent(10, rows[0].event_id)).map(r => r.event_id)).toEqual([rows[1].event_id]);
+    await database.query(`UPDATE telemetry_event SET quarantined_at = '2026-11-12T00:00:00.000Z' WHERE event_id = ?`, [rows[3].event_id]);
+    const after = (await repository.seqOf(rows[0].event_id))!;
+    expect((await repository.findUnsent(10, after)).map(r => r.event_id)).toEqual([rows[1].event_id, rows[3].event_id]);
+    expect(await repository.seqOf(uuidv7())).toBeNull();
 });
 
 test('markSent touches only the ids given and only rows not already sent', async () => {

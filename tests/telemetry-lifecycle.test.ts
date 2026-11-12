@@ -6,6 +6,7 @@ import { TelemetryEventEntity } from '../src/infrastructure/database/entities';
 import { SettingRepository, TelemetryRepository } from '../src/infrastructure/database/repositories';
 import { buildDataSourceOptions } from '../src/infrastructure/database/options';
 import pkg from '../package.json';
+import { v7 as uuidv7 } from 'uuid';
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 let database: DataSource;
@@ -115,4 +116,32 @@ test('a failed heartbeat is logged, not thrown', async () => {
     await expect(gateway.heartbeat()).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/telemetry heartbeat/));
     await database.initialize();
+});
+
+// The computer's clock is not trustworthy after a power cut (a dead CMOS battery resets
+// it), and event_id follows the clock. Detection follows the order rows were written.
+function lifecycleRow(type: string, ms: number): TelemetryEventEntity {
+    return Object.assign(new TelemetryEventEntity(), {
+        event_id: uuidv7({ msecs: ms }), schema_version: 1, type, occurred_at: new Date(ms).toISOString(), received_at: new Date(ms).toISOString(),
+        site_id: 'VC1', gateway_id: 'g', device_id: null, session_id: null, capture_id: null, screening_id: null, authenticated: null, payload: '{}', sent_at: null,
+    });
+}
+
+test('a crash after the clock went back is still an unclean shutdown', async () => {
+    const repository = new TelemetryRepository(database);
+    const real = Date.parse('2026-11-12T00:00:00Z'), reset = Date.parse('2020-01-01T00:00:00Z');
+    for (const row of [lifecycleRow('gateway.started', real), lifecycleRow('gateway.stopped', real + 1000), lifecycleRow('gateway.started', reset), lifecycleRow('gateway.heartbeat', reset + 60_000)]) {
+        await repository.insertOrIgnore([row]);
+    }
+    await lifecycle().start();
+    expect(await types()).toContain('gateway.unclean_shutdown');
+});
+
+test('a clean stop written after a heartbeat with a clock ahead is not an unclean shutdown', async () => {
+    const repository = new TelemetryRepository(database);
+    const future = Date.parse('2030-01-01T00:00:00Z'), real = Date.now();
+    await repository.insertOrIgnore([lifecycleRow('gateway.heartbeat', future)]);
+    await repository.insertOrIgnore([lifecycleRow('gateway.stopped', real)]);
+    await lifecycle().start();
+    expect(await types()).not.toContain('gateway.unclean_shutdown');
 });

@@ -14,7 +14,7 @@ export { DicomPreviewService } from './DicomPreviewService';
 export { SystemService } from './SystemService';
 
 export { ScreeningExpiry } from './ScreeningExpiry';
-export { TelemetryService, TelemetrySignInRequiredError } from './TelemetryService';
+export { TelemetryCursorNotFoundError, TelemetryService, TelemetrySignInRequiredError } from './TelemetryService';
 export { TelemetryLifecycle } from './TelemetryLifecycle';
 export { TelemetryPushWorker } from './TelemetryPushWorker';
 export { TelemetryOutbox } from './TelemetryOutbox';

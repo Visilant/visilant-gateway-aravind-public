@@ -4,7 +4,7 @@ import type { ValidationError } from 'class-validator';
 import { Authorized, BadRequestError, Body, CurrentUser, Get, HttpError, JsonController, OnUndefined, Post, QueryParams, Req, Res, UnauthorizedError } from 'routing-controllers';
 import { Inject, Service } from 'typedi';
 import { ANONYMOUS_REQUESTS_PER_MINUTE, PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
-import { TelemetryService, TelemetrySignInRequiredError } from '../../application/services';
+import { TelemetryCursorNotFoundError, TelemetryService, TelemetrySignInRequiredError } from '../../application/services';
 import { UserEntity, UserRole } from '../../infrastructure/database';
 import type { Logger } from '../../infrastructure/logger';
 import { LOGGER } from '../../tokens';
@@ -77,6 +77,13 @@ export class TelemetryController {
     @Get('/export')
     @Authorized(UserRole.ADMIN)
     async export(@QueryParams() query: TelemetryExportQueryDto, @Res() res: Response): Promise<Response> {
+        let chunks: AsyncGenerator<string>;
+        try {
+            chunks = await this.telemetry.exportUnsent(query.since ?? null);
+        } catch (err) {
+            if (err instanceof TelemetryCursorNotFoundError) throw new BadRequestError(err.message);
+            throw err;
+        }
         res.set({
             'Content-Type': 'application/x-ndjson; charset=utf-8',
             'Content-Disposition': `attachment; filename="${this.telemetry.exportFilename()}"`,
@@ -84,7 +91,7 @@ export class TelemetryController {
         });
         res.flushHeaders();
         try {
-            for await (const chunk of this.telemetry.exportUnsent(query.since ?? null)) {
+            for await (const chunk of chunks) {
                 if (res.destroyed) break;
                 if (!res.write(chunk)) await Promise.race([once(res, 'drain'), once(res, 'close')]);
             }
