@@ -95,4 +95,65 @@ describe('loadConfig', () => {
             for (const retention_keep_count of [0, -1, 1.5, 'ten']) expect(() => loadConfig(writeConfig({ ...VALID, retention_keep_count }))).toThrow(/retention_keep_count/);
         });
     });
+    describe('telemetry', () => {
+        const TELEMETRY = { enabled: true, site_id: 'VC-THENI-01', central_url: 'https://central.example.org', central_token: 'synthetic-token' };
+
+        it('is off by default and needs nothing else', () => {
+            const config = loadConfig(writeConfig(VALID));
+            expect(config.telemetry.enabled).toBe(false);
+            expect(config.telemetry.max_outbox_mb).toBe(200);
+            expect(config.telemetry.retention_days).toBe(90);
+        });
+
+        it('accepts a full block', () => {
+            const config = loadConfig(writeConfig({ ...VALID, telemetry: TELEMETRY }));
+            expect(config.telemetry).toMatchObject(TELEMETRY);
+        });
+
+        // Every row carries site_id, and central combines sites by it. A gateway that
+        // would write rows with no site must not start.
+        it('refuses to start when telemetry is enabled with no site_id, naming the key', () => {
+            const { site_id: _s, ...noSite } = TELEMETRY;
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: noSite }))).toThrow(/telemetry\.site_id/);
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, site_id: '' } }))).toThrow(/telemetry\.site_id/);
+        });
+
+        it('rejects a site_id that is not a plain identifier', () => {
+            for (const site_id of ['has space', 'a/b', 'x'.repeat(65)]) {
+                expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, site_id } }))).toThrow(/telemetry\.site_id/);
+            }
+        });
+
+        it('allows a disabled block without a site_id, so a site can ship telemetry off', () => {
+            expect(loadConfig(writeConfig({ ...VALID, telemetry: { enabled: false } })).telemetry.enabled).toBe(false);
+        });
+
+        // Without both, pushes would fail on every tick with a 401 or a bad URL.
+        it('requires central_url and central_token together', () => {
+            const { central_token: _t, ...noToken } = TELEMETRY;
+            const { central_url: _u, ...noUrl } = TELEMETRY;
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: noToken }))).toThrow(/telemetry\.central_token/);
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: noUrl }))).toThrow(/telemetry\.central_url/);
+        });
+
+        it('accepts enabled with no central yet: rows stay in the outbox and can be exported', () => {
+            const { central_token: _t, central_url: _u, ...local } = TELEMETRY;
+            expect(loadConfig(writeConfig({ ...VALID, telemetry: local })).telemetry.central_url).toBeUndefined();
+        });
+
+        it('rejects a central_url that is not http or https', () => {
+            for (const central_url of ['ftp://central.example.org', 'not a url']) {
+                expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, central_url } }))).toThrow(/telemetry\.central_url/);
+            }
+        });
+
+        it('rejects an unknown telemetry key', () => {
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, siteid: 'x' } }))).toThrow(/siteid/);
+        });
+
+        it('rejects non-positive caps', () => {
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, max_outbox_mb: 0 } }))).toThrow(/telemetry\.max_outbox_mb/);
+            expect(() => loadConfig(writeConfig({ ...VALID, telemetry: { ...TELEMETRY, retention_days: 0 } }))).toThrow(/telemetry\.retention_days/);
+        });
+    });
 });

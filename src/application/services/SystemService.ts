@@ -42,6 +42,12 @@ export class SystemService {
         return { current: this.history[this.history.length - 1], history: [...this.history] };
     }
     config(): ConfigSnapshotDto {
-        return { config: this.settings, node_version: process.version, package_version: pkg.version, uptime_seconds: process.uptime(), diagnostics_env_dir: process.env.GATEWAY_DIAGNOSTICS_DIR ?? null };
+        return { config: redact(this.settings), node_version: process.version, package_version: pkg.version, uptime_seconds: process.uptime(), diagnostics_env_dir: process.env.GATEWAY_DIAGNOSTICS_DIR ?? null };
     }
+}
+
+// The central telemetry token is a credential. Any signed-in user can read this page.
+function redact(config: GatewayConfig): GatewayConfig {
+    if (!config.telemetry?.central_token) return config;
+    return { ...config, telemetry: { ...config.telemetry, central_token: '(set)' } } as GatewayConfig;
 }
