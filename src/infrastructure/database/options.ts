@@ -1,6 +1,6 @@
 import path from 'path';
 import type { BetterSqlite3ConnectionOptions } from 'typeorm/driver/better-sqlite3/BetterSqlite3ConnectionOptions';
-import { CaptureEntity, ScreeningEntity, SettingEntity, UserEntity } from './entities';
+import { CaptureEntity, ScreeningEntity, SettingEntity, TelemetryEventEntity, UserEntity } from './entities';
 
 // Resolves to ./migrations in source and build/migrations once compiled.
 const MIGRATIONS_GLOB = path.join(__dirname, '../../../migrations/*.{ts,js}');
@@ -15,7 +15,7 @@ export function buildDataSourceOptions(databasePath: string): BetterSqlite3Conne
     return {
         type: 'better-sqlite3',
         database: databasePath,
-        entities: [CaptureEntity, ScreeningEntity, SettingEntity, UserEntity],
+        entities: [CaptureEntity, ScreeningEntity, SettingEntity, TelemetryEventEntity, UserEntity],
         migrations: [MIGRATIONS_GLOB],
         synchronize: false,
         prepareDatabase: (db) => {
