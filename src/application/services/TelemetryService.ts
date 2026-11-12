@@ -128,14 +128,17 @@ export class TelemetryService {
         type: GatewayEventType,
         payload: Record<string, unknown>,
         ids: { capture_id?: string | null; screening_id?: string | null } = {},
+        // A fixed event_id and time, for an event that may be written again after a
+        // power cut: the outbox keeps the first copy.
+        fixed: { event_id: string; occurred_at: string } | null = null,
     ): Promise<string | null> {
         if (!this.enabled || !this.outbox.accepts(type, null)) return null;
         const now = new Date().toISOString();
         const row = Object.assign(new TelemetryEventEntity(), {
-            event_id: uuidv7(),
+            event_id: fixed?.event_id ?? uuidv7(),
             schema_version: 1,
             type,
-            occurred_at: now,
+            occurred_at: fixed?.occurred_at ?? now,
             received_at: now,
             site_id: this.siteId(),
             gateway_id: await this.gatewayId(),

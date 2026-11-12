@@ -157,11 +157,15 @@ describe('ai.assessed telemetry', () => {
         expect(telemetry.record).toHaveBeenCalledTimes(1);
         expect(telemetry.record).toHaveBeenCalledWith('ai.assessed',
             { gateway_capture_id: created.id, laterality: 'R', light: 'WHITE', assessment },
-            { capture_id: 'client-ai', screening_id: 'screening-1' });
+            { capture_id: 'client-ai', screening_id: 'screening-1' },
+            { event_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/), occurred_at: expect.any(String) });
         // Never the worklist entry: that is where the patient is.
         expect(JSON.stringify(telemetry.record.mock.calls)).not.toMatch(/ACC1|patient/);
+        // A retry of the same capture writes it again under the same event_id, which the
+        // outbox ignores; that is how a write lost to a power cut is recovered.
         await service.create(withAi, await upload('ai-again'), null, 'client-ai');
-        expect(telemetry.record).toHaveBeenCalledTimes(1);
+        expect(telemetry.record).toHaveBeenCalledTimes(2);
+        expect(telemetry.record.mock.calls[1]).toEqual(telemetry.record.mock.calls[0]);
     });
 
     it('uses the gateway capture id when the phone sent no idempotency key', async () => {
@@ -171,6 +175,21 @@ describe('ai.assessed telemetry', () => {
 
     it('writes nothing for a capture without an assessment', async () => {
         await service.create(input, await upload('plain'), null, 'client-plain');
+        expect(telemetry.record).not.toHaveBeenCalled();
+    });
+
+    it('a retry after a lost telemetry write records it', async () => {
+        telemetry.record.mockRejectedValueOnce(new Error('synthetic power cut'));
+        const withAi = { ...input, ai_assessment: assessment } as CreateCaptureDto;
+        await service.create(withAi, await upload('cut'), null, 'client-cut');
+        await service.create(withAi, await upload('cut-retry'), null, 'client-cut');
+        expect(telemetry.record).toHaveBeenCalledTimes(2);
+        expect(telemetry.record.mock.calls[1][3]).toEqual(telemetry.record.mock.calls[0][3]);
+    });
+
+    it('a replay without an assessment writes nothing', async () => {
+        await service.create(input, await upload('plain-1'), null, 'client-plain-2');
+        await service.create(input, await upload('plain-2'), null, 'client-plain-2');
         expect(telemetry.record).not.toHaveBeenCalled();
     });
 

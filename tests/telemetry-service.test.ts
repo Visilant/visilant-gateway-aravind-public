@@ -57,3 +57,12 @@ test('without sign-in, a batch with a capture type is refused whole and stores n
     expect(await new TelemetryRepository(database).countUnsent()).toBe(0);
     expect((await service.ingest([batch[0]], false)).accepted).toHaveLength(1);
 });
+
+test('record with a given event_id and time stores it once however often it is written', async () => {
+    const options = { event_id: '01a1d16e-fb44-749a-b957-2e22c22e8771', occurred_at: '2026-11-12T03:00:00.000Z' };
+    expect(await service.record('ai.assessed', { a: 1 }, {}, options)).toBe(options.event_id);
+    await service.record('ai.assessed', { a: 2 }, {}, options);
+    const rows = await new TelemetryRepository(database).findUnsent(10);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ event_id: options.event_id, occurred_at: options.occurred_at, payload: '{"a":1}' });
+});

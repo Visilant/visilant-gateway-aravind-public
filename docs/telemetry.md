@@ -111,9 +111,16 @@ sent [before sign-in](#before-sign-in).
 | `device.health` | Every 5 min while the app is in front | `battery_pct`, `charging`, `free_storage_bytes`, `network_kind` (`wifi`, `cellular`, `ethernet`, `none`, `other`), `seeker_connected`; optional `battery_temp_c`, `thermal_status` (Android thermal status, lowercase), `wifi_rssi_dbm` |
 | `gateway.unreachable` | First successful send after an outage | `from`, `to` (ISO 8601 UTC), `dropped` (counts by phone event type) |
 
-Text fields accept only versions (`[A-Za-z0-9._+-]`, up to 64), error and operation
-codes (`[A-Za-z0-9_.-]`, up to 64), Java class and method names, SHA-256 hex, and the
-device model. There is no free-text field. The exact rules are in
+Text fields are allow-listed by shape: versions (`[A-Za-z0-9._+-]`, up to 64), Java class
+and method names, SHA-256 hex, the device model (`Build.MODEL`, letters, digits, spaces
+and `._()+-`), and codes. An `error_code` is upper snake case with at least one
+underscore or digit (`E_CAMERA`, `HTTP_503`, `NET_TIMEOUT`); a bare `ETIMEDOUT` must be
+sent as, for example, `NET_TIMEOUT`. An `operation` is lower snake case with at least
+one underscore (`worklist_refresh`). `exit_reason` is one of Android's
+`ApplicationExitInfo` reasons, lowercased (`crash`, `anr`, `low_memory`, ...). There is
+no message field. Codes and the device model are patterns, not closed lists: the shapes
+rule out a plain word such as a name, but not every string a person could type, so the
+app must only ever fill them from code. The exact rules are in
 [`telemetry.dto.ts`](../src/application/dto/telemetry.dto.ts).
 
 ### Written by the gateway
@@ -126,7 +133,7 @@ The phone may not send these types.
 | `gateway.heartbeat` | Every 60 s | Same as `gateway.started` |
 | `gateway.stopped` | Clean shutdown | Same as `gateway.started`, plus `reason`: `launcher`, `launcher_gone`, `SIGTERM` or `SIGINT` |
 | `gateway.unclean_shutdown` | Start-up, when the last of the three rows above to be written is not `gateway.stopped` | `last_heartbeat_at`, `restarted_at`, `downtime_s`, `host_restarted` (the computer booted after the last heartbeat: a power cut or an OS restart rather than the gateway alone; from the wall clock, so approximate) |
-| `ai.assessed` | `POST /captures` with a valid `ai_assessment` | `gateway_capture_id`, `laterality`, `light`, `assessment` (the `AiAssessment` as received). `capture_id` is the phone's `Idempotency-Key`, or the gateway's capture ID when there was none. |
+| `ai.assessed` | `POST /captures` with a valid `ai_assessment` | `gateway_capture_id`, `laterality`, `light`, `assessment` (the `AiAssessment` as received). `capture_id` is the phone's `Idempotency-Key`, or the gateway's capture ID when there was none. `event_id` is derived from the capture and `occurred_at` is the capture time, so a retried upload writes the same event again: one lost to a power cut is recovered, and a duplicate is ignored. |
 
 A power cut in the first minute leaves `gateway.started` as the last row written, so that is
 also reported as an unclean shutdown. `last_heartbeat_at` is then the start time.
@@ -250,7 +257,8 @@ Records are pseudonymous, not anonymous: `capture_id` and `screening_id` join to
 patient's `.dcm` at the site, on purpose. Patient identity never enters a record.
 
 - Every type is an allow-list DTO with `whitelist` and `forbidNonWhitelisted`. Unknown
-  types and keys are 400. There is no message field.
+  types and keys are 400. There is no message field, and codes are shaped to rule out a
+  plain word (see [Event types](#event-types)).
 - Crashes carry the exception class, an error code and code-only frames. The exception
   message is never sent.
 - `ai.assessed` carries the assessment, never the worklist entry.

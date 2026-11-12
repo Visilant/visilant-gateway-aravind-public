@@ -7,9 +7,11 @@ import { LIGHT_MODES } from './capture.dto';
 
 // Phone telemetry, schema version 1. See docs/telemetry.md and docs/api.md.
 //
-// Allow-list, not scrubbing: every field is a closed enum, a number, a UUID, a version
-// or an error code. There is no free-text field, so there is nothing that could carry a
-// patient name. Unknown types and unknown keys are rejected.
+// Allow-list, not scrubbing: every field is a closed enum, a number, a UUID, a version,
+// a Java class or method name, an error or operation code, or the device model. There
+// is no message field. Codes are patterns, not a closed list, so they are shaped to rule
+// out a plain word: an error code is upper snake case with an underscore or a digit, an
+// operation lower snake case with an underscore. Unknown types and keys are rejected.
 
 export const MAX_EVENTS_PER_REQUEST = 100;
 export const MAX_BODY_BYTES = 256 * 1024;
@@ -48,7 +50,14 @@ const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 // Same format as the screening and capture ids the app already sends.
 const LOCAL_ID = /^[A-Za-z0-9-]{1,128}$/;
 const VERSION = /^[A-Za-z0-9._+-]{1,64}$/;
-const CODE = /^[A-Za-z0-9_.-]{1,64}$/;
+// E_CAMERA, HTTP_503, NET_TIMEOUT. Not ETIMEDOUT or a name on its own.
+const ERROR_CODE = /^(?=[A-Z0-9_]*[_0-9])[A-Z][A-Z0-9_]{1,63}$/;
+// worklist_refresh, capture_upload.
+const OPERATION = /^(?=[a-z0-9_]*_)[a-z][a-z0-9_]{1,63}$/;
+// android.app.ApplicationExitInfo REASON_*, lowercased.
+const EXIT_REASONS = ['unknown', 'exit_self', 'signaled', 'low_memory', 'crash', 'crash_native', 'anr', 'initialization_failure',
+    'permission_change', 'excessive_resource_usage', 'user_requested', 'user_stopped', 'dependency_died', 'other', 'freezer',
+    'package_state_change', 'package_updated'];
 const SHA256 = /^[a-f0-9]{64}$/;
 const DEVICE_MODEL = /^[A-Za-z0-9 ._()+-]{1,64}$/;
 const JAVA_CLASS = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
@@ -92,10 +101,10 @@ export class AppCrashedPayload {
     // from Android's ApplicationExitInfo.
     @IsIn(['uncaught_handler', 'exit_info']) source!: string;
     @Matches(VERSION) app_version!: string;
-    @IsOptional() @Matches(CODE) error_code?: string;
+    @IsOptional() @Matches(ERROR_CODE) error_code?: string;
     @IsOptional() @Matches(JAVA_CLASS) @MaxLength(256) exception_class?: string;
     // ApplicationExitInfo reason, for example crash, anr or low_memory.
-    @IsOptional() @Matches(CODE) exit_reason?: string;
+    @IsOptional() @IsIn(EXIT_REASONS) exit_reason?: string;
     // For exit_info: the session that crashed. session_id is the launch reporting it.
     @IsOptional() @Matches(UUID) crashed_session_id?: string;
     @IsOptional() @IsArray() @ArrayMaxSize(64) @ValidateNested({ each: true }) @Type(() => StackFrame)
@@ -103,8 +112,8 @@ export class AppCrashedPayload {
 }
 
 export class OperationFailedPayload {
-    @Matches(CODE) operation!: string;
-    @Matches(CODE) error_code!: string;
+    @Matches(OPERATION) operation!: string;
+    @Matches(ERROR_CODE) error_code!: string;
 }
 
 export class CaptureTakenPayload {
@@ -123,7 +132,7 @@ export class CaptureUploadFailedPayload {
     @IsInt() @Min(0) duration_ms!: number;
     @IsOptional() @IsInt() @Min(0) bytes?: number;
     @IsOptional() @IsInt() @Min(100) @Max(599) http_status?: number;
-    @IsOptional() @Matches(CODE) error_code?: string;
+    @IsOptional() @Matches(ERROR_CODE) error_code?: string;
 }
 
 // Normalised to the frame: 0 to 1 on each axis.

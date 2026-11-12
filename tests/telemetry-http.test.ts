@@ -195,6 +195,10 @@ describe('rejections', () => {
         ['a crash with an exception message', phoneEvent('app.crashed', { payload: { ...PAYLOADS['app.crashed'].payload, message: 'x' } })],
         ['a crash frame from a non-source file', phoneEvent('app.crashed', { payload: { ...PAYLOADS['app.crashed'].payload, stack_frames: [{ class: 'a.B', method: 'c', file: 'libc.so', line: 1 }] } })],
         ['a yolo rejection reason not in the list', phoneEvent('yolo.autocapture', { payload: { ...PAYLOADS['yolo.autocapture'].payload, rejected_frames: { blurry: 1 } } })],
+        ['an error code that is a plain word, like a name', phoneEvent('operation.failed', { payload: { operation: 'worklist_refresh', error_code: 'RAMESHKUMAR' } })],
+        ['a lower-case error code', phoneEvent('operation.failed', { payload: { operation: 'worklist_refresh', error_code: 'http_503' } })],
+        ['an operation that is a plain word', phoneEvent('operation.failed', { payload: { operation: 'ramesh', error_code: 'HTTP_503' } })],
+        ['an exit reason Android does not have', phoneEvent('app.crashed', { payload: { ...PAYLOADS['app.crashed'].payload, exit_reason: 'ramesh_kumar' } })],
         ['an outage note counting an unknown type', phoneEvent('gateway.unreachable', { payload: { ...PAYLOADS['gateway.unreachable'].payload, dropped: { 'x.y': 1 } } })],
     ];
     test.each(cases)('rejects %s with 400 and stores nothing from the batch', async (_name, bad) => {
