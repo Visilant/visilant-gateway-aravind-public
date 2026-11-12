@@ -142,11 +142,24 @@ also reported as an unclean shutdown. `last_heartbeat_at` is then the start time
    Ids it did not send are ignored.
 5. A full batch goes round again until fewer than 500 rows were read.
 
-Any other answer is a failure: a non-2xx status, a network error, a 30 s timeout, a body
-without an `event_ids` list of strings, or a reply that confirms none of the batch. The
-rows stay unsent, the log says `telemetry push failed: ...` with the HTTP status or the
-network error code, and the next attempt waits 1, 2, 4, 8, 16 and then 30 minutes. The
-first success resets the wait. The wait is not kept across a restart.
+One bad row cannot stall the outbox:
+
+- **400, 413 or 422** blames the request, so the batch is halved and each half sent
+  again, down to single rows. A row central refuses on its own is **quarantined** with
+  `quarantine_reason` `central_400`, `central_413` or `central_422`.
+- A row central leaves out of 5 answers is quarantined with `unconfirmed`. Each answer
+  that leaves it out adds 1 to `push_attempts`.
+- A quarantined row is never pushed again and never pruned. It is listed in the
+  [export](#export-for-a-site-that-stays-offline) with its `quarantine_reason`, and the
+  log says how many were quarantined. Nothing about the row's content is logged.
+
+Any other answer is a failure of the whole batch: another non-2xx status, a network
+error, a 30 s timeout, a body without an `event_ids` list of strings, or a reply that
+confirms and quarantines nothing. The rows stay unsent, and the log says
+`telemetry push failed: ...` with the HTTP status or the network error code and what to
+check: the token for 401 and 403, nothing on site for 5xx. The next attempt waits 1, 2,
+4, 8, 16 and then 30 minutes, timed on a monotonic clock so a wall clock set back cannot
+stall it. The first success resets the wait. The wait is not kept across a restart.
 
 A power cut between central's reply and step 4 only means the rows are sent again, and
 central ignores them.
@@ -175,7 +188,8 @@ the event `since` (or all of them) as NDJSON, one envelope per line, in the orde
 were written. A phone with a slow clock makes event_ids that sort earlier, so `since`
 follows write order, not the id. A `since` this outbox does not hold (for example one
 already sent and pruned) is 400: omit it for a full export. The file is
-named `telemetry-<site_id>-<UTC time>.ndjson`. A support person uploads it to central,
+named `telemetry-<site_id>-<UTC time>.ndjson`. A quarantined row's line also has
+`quarantine_reason`; central's import should ignore that field. A support person uploads it to central,
 which ingests it through the same dedup. When the internet returns, the normal push
 sends the same rows, central returns their ids, and only then are they marked sent.
 Exporting marks nothing.

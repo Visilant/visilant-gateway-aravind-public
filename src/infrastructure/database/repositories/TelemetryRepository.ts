@@ -81,6 +81,30 @@ export class TelemetryRepository {
         return result.affected ?? 0;
     }
 
+    async quarantine(eventIds: string[], reason: string, at: string): Promise<number> {
+        if (eventIds.length === 0) return 0;
+        const result = await this.repo.createQueryBuilder().update(TelemetryEventEntity)
+            .set({ quarantined_at: at, quarantine_reason: reason })
+            .where('event_id IN (:...ids)', { ids: eventIds }).andWhere('sent_at IS NULL')
+            .execute();
+        return result.affected ?? 0;
+    }
+
+    // One more answer from central that left these rows out. Rows that reach
+    // `maxAttempts` are quarantined in the same statement. Returns how many were.
+    async recordUnconfirmed(eventIds: string[], maxAttempts: number, at: string): Promise<number> {
+        if (eventIds.length === 0) return 0;
+        const rows = await this.database.query(
+            `UPDATE "telemetry_event" SET "push_attempts" = "push_attempts" + 1,
+                "quarantined_at" = CASE WHEN "push_attempts" + 1 >= ? THEN ? ELSE "quarantined_at" END,
+                "quarantine_reason" = CASE WHEN "push_attempts" + 1 >= ? THEN 'unconfirmed' ELSE "quarantine_reason" END
+             WHERE "event_id" IN (${eventIds.map(() => '?').join(', ')}) AND "sent_at" IS NULL
+             RETURNING "quarantined_at"`,
+            [maxAttempts, at, maxAttempts, ...eventIds],
+        ) as Array<{ quarantined_at: string | null }>;
+        return rows.filter((row) => row.quarantined_at !== null).length;
+    }
+
     // The last gateway.started, heartbeat or stopped row written.
     newestLifecycle(): Promise<TelemetryEventEntity | null> {
         return this.repo.createQueryBuilder('t')

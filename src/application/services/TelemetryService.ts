@@ -161,7 +161,10 @@ export class TelemetryService {
         for (;;) {
             const page = await this.repository.findUnsent(EXPORT_PAGE, cursor);
             if (page.length === 0) return;
-            yield page.map((row) => JSON.stringify(toEnvelope(row)) + '\n').join('');
+            // A quarantined row says why, so support knows central refused it.
+            yield page.map((row) => JSON.stringify(row.quarantine_reason
+                ? { ...toEnvelope(row), quarantine_reason: row.quarantine_reason }
+                : toEnvelope(row)) + '\n').join('');
             if (page.length < EXPORT_PAGE) return;
             cursor = page[page.length - 1].seq;
         }

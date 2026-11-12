@@ -306,6 +306,13 @@ describe('GET /telemetry/export', () => {
         expect(JSON.parse(response.text).error).toMatch(/omit since/);
     });
 
+    test('quarantined rows are in the export with their reason', async () => {
+        const event = phoneEvent('device.health');
+        await post({ events: [event] });
+        await database.query(`UPDATE telemetry_event SET quarantined_at = '2026-11-12T00:00:00.000Z', quarantine_reason = 'central_400'`);
+        expect((await exportRows()).lines).toEqual([expect.objectContaining({ event_id: event.event_id, quarantine_reason: 'central_400' })]);
+    });
+
     test('an empty outbox is an empty file', async () => {
         const response = await exportRows();
         expect(response.status).toBe(200);

@@ -5,7 +5,7 @@ const TIMEOUT_MS = 30_000;
 // A push that central did not confirm. `reason` is an HTTP status or a network error
 // code, which is what the log needs; never the token, never the body.
 export class CentralPushError extends Error {
-    constructor(readonly reason: string, message: string) {
+    constructor(readonly reason: string, message: string, readonly status: number | null = null) {
         super(message);
     }
 }
@@ -29,7 +29,7 @@ export class CentralClient {
         }
         if (!response.ok) {
             await response.body?.cancel().catch(() => undefined);
-            throw new CentralPushError(`HTTP ${response.status}`, `central answered HTTP ${response.status}`);
+            throw new CentralPushError(`HTTP ${response.status}`, `central answered HTTP ${response.status}`, response.status);
         }
         const body = await response.json().catch(() => null) as { event_ids?: unknown } | null;
         if (!Array.isArray(body?.event_ids) || !body.event_ids.every((id) => typeof id === 'string')) {

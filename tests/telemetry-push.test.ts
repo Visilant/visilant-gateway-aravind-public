@@ -97,8 +97,8 @@ test('an HTTP failure keeps the rows, logs the status and backs off before tryin
     await seed(2);
     reply = () => ({ status: 503, body: { error: 'synthetic outage' } });
     const push = worker();
-    let now = Date.parse('2026-11-12T00:00:00.000Z');
-    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    let now = 1_000_000;
+    jest.spyOn(performance, 'now').mockImplementation(() => now);
     expect(await push.tick()).toEqual({ sent: 0 });
     expect(await unsent()).toBe(2);
     expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/HTTP 503.*retrying in 1 min/));
@@ -198,4 +198,79 @@ test('kick sends right away, but not during a backoff', async () => {
     await seed(1);
     await push.kick();
     expect(requests).toHaveLength(2);
+});
+
+// Backoff must survive the wall clock moving: NTP or a dead CMOS battery can put it back.
+test('backoff follows a monotonic clock, so a wall clock set back does not stall the push', async () => {
+    await seed(1);
+    reply = () => ({ status: 503, body: {} });
+    const push = worker();
+    let mono = 5_000_000;
+    jest.spyOn(performance, 'now').mockImplementation(() => mono);
+    await push.tick();
+    jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2020-01-01T00:00:00.000Z'));
+    reply = (body) => ({ status: 200, body: { event_ids: body.events.map((e: { event_id: string }) => e.event_id) } });
+    mono += 61_000;
+    expect(await push.tick()).toEqual({ sent: 1 });
+});
+
+describe('a batch central will not take', () => {
+    const quarantined = () => database.query(`SELECT event_id, quarantine_reason, payload FROM telemetry_event WHERE quarantined_at IS NOT NULL ORDER BY seq`) as Promise<Array<{ event_id: string; quarantine_reason: string }>>;
+
+    test('413: halves the batch until central takes it', async () => {
+        await seed(300);
+        reply = (body) => body.events.length > 80
+            ? { status: 413, body: {} }
+            : { status: 200, body: { event_ids: body.events.map((e: { event_id: string }) => e.event_id) } };
+        expect(await worker().tick()).toEqual({ sent: 300 });
+        expect(await quarantined()).toEqual([]);
+        expect(requests.filter(r => r.body.events.length <= 80).length).toBeGreaterThan(1);
+    });
+
+    test('400 caused by one row: that row is quarantined with a reason code and the rest go', async () => {
+        const rows = await seed(600);
+        const poison = rows[3].event_id;
+        reply = (body) => body.events.some((e: { event_id: string }) => e.event_id === poison)
+            ? { status: 400, body: { error: 'synthetic: bad row' } }
+            : { status: 200, body: { event_ids: body.events.map((e: { event_id: string }) => e.event_id) } };
+        expect(await worker().tick()).toEqual({ sent: 599 });
+        expect((await quarantined()).map(r => [r.event_id, r.quarantine_reason])).toEqual([[poison, 'central_400']]);
+        expect(await unsent()).toBe(1);
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/1 event\(s\) quarantined.*central_400/));
+        // Quarantined rows are not pushed again.
+        requests = [];
+        await worker().tick();
+        expect(requests).toEqual([]);
+    });
+
+    test('rows central keeps leaving out are quarantined after 5 answers, and the push moves past them', async () => {
+        const rows = await seed(600);
+        const poison = new Set(rows.slice(0, 500).map(r => r.event_id));
+        reply = (body) => ({ status: 200, body: { event_ids: body.events.map((e: { event_id: string }) => e.event_id).filter((id: string) => !poison.has(id)) } });
+        const push = worker();
+        let mono = 0;
+        jest.spyOn(performance, 'now').mockImplementation(() => mono);
+        for (let i = 0; i < 5; i++) { await push.tick(); mono += 31 * 60_000; }
+        expect((await quarantined()).length).toBe(500);
+        expect(new Set((await quarantined()).map(r => r.quarantine_reason))).toEqual(new Set(['unconfirmed']));
+        // The fifth answer quarantined them, and the same tick went on to the other 100.
+        expect((await database.query(`SELECT COUNT(*) AS n FROM telemetry_event WHERE sent_at IS NOT NULL`))[0].n).toBe(100);
+        expect(await repository.countUnsent()).toBe(500);
+        expect(await push.tick()).toEqual({ sent: 0 });
+    });
+
+    test('a 5xx is not split: the whole batch waits for the backoff', async () => {
+        await seed(10);
+        reply = () => ({ status: 502, body: {} });
+        await worker().tick();
+        expect(requests).toHaveLength(1);
+        expect(await quarantined()).toEqual([]);
+    });
+
+    test('401 says the token is wrong', async () => {
+        await seed(1);
+        reply = () => ({ status: 401, body: {} });
+        await worker().tick();
+        expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/HTTP 401.*central_token/));
+    });
 });
