@@ -1,3 +1,4 @@
+import os from 'os';
 import { Inject, Service } from 'typedi';
 import type { GatewayConfig } from '../../config';
 import { TelemetryRepository } from '../../infrastructure/database/repositories';
@@ -29,11 +30,15 @@ export class TelemetryLifecycle {
         if (!this.config.telemetry.enabled) return;
         const last = await this.repository.newestLifecycle();
         if (last && last.type !== 'gateway.stopped') {
-            const restartedAt = new Date().toISOString();
+            const now = Date.now();
+            const lastSeen = Date.parse(last.occurred_at);
             await this.telemetry.record('gateway.unclean_shutdown', {
                 last_heartbeat_at: last.occurred_at,
-                restarted_at: restartedAt,
-                downtime_s: Math.max(0, Math.round((Date.parse(restartedAt) - Date.parse(last.occurred_at)) / 1000)),
+                restarted_at: new Date(now).toISOString(),
+                downtime_s: Math.max(0, Math.round((now - lastSeen) / 1000)),
+                // The computer booted after the last sign of life: a power cut or an OS
+                // restart, not the gateway alone. Wall-clock based, so approximate.
+                host_restarted: now - os.uptime() * 1000 > lastSeen,
             });
             this.logger.warn(`telemetry: the previous run ended without a clean shutdown; last heartbeat at ${last.occurred_at}`);
         }
@@ -55,10 +60,10 @@ export class TelemetryLifecycle {
         this.timer = null;
     }
 
-    // Before the database closes.
-    async stop(): Promise<void> {
+    // Before the database closes. `reason` says what asked for the stop.
+    async stop(reason = 'unknown'): Promise<void> {
         this.stopTimer();
-        await this.telemetry.record('gateway.stopped', await this.status()).catch((err: unknown) => {
+        await this.telemetry.record('gateway.stopped', { ...await this.status(), reason }).catch((err: unknown) => {
             this.logger.error(`telemetry: gateway.stopped could not be written, so the next start reports an unclean shutdown: ${err instanceof Error ? err.message : String(err)}`);
         });
     }

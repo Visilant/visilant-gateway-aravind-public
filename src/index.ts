@@ -12,10 +12,13 @@ import { DiagnosticsService, RetentionService, ScreeningExpiry, SyncWorker, Syst
 import { GatewayServer } from './presentation/server';
 import { CONFIG, DATABASE, LOGGER, RECORDER } from './tokens';
 import { WorklistSettingsService } from './application/services/WorklistSettingsService';
+import { onShutdownRequest, type ShutdownReason } from './shutdown';
 
 // An installed launcher owns this child. Do not leave an orphan queue worker behind
 // if Task Scheduler restarts a crashed launcher. Startup recovery handles interruption.
-if (process.send && process.env.GATEWAY_SETUP_TOKEN) process.once('disconnect', () => process.exit(1));
+// Until start-up finishes this exits at once; after that it is a clean shutdown.
+const exitIfOrphaned = () => process.exit(1);
+if (process.send && process.env.GATEWAY_SETUP_TOKEN) process.once('disconnect', exitIfOrphaned);
 
 async function bootstrap(): Promise<void> {
     if (process.env.GATEWAY_DIAGNOSTICS_DIR) await diagnostics.start(path.resolve(process.env.GATEWAY_DIAGNOSTICS_DIR));
@@ -72,8 +75,8 @@ async function bootstrap(): Promise<void> {
     const telemetryPush = Container.get(TelemetryPushWorker);
     telemetryPush.start();
 
-    const shutdown = (signal: string) => {
-        logger.info(`${signal} received, shutting down`);
+    const shutdown = (reason: ShutdownReason) => {
+        logger.info(`shutting down (${reason})`);
         worker.stop();
         system.stop();
         expiry.stop();
@@ -81,13 +84,14 @@ async function bootstrap(): Promise<void> {
         telemetryOutbox.stop();
         // gateway.stopped first: server.close can wait on idle phone connections until
         // the forced exit below, and without the row the next start reports a crash.
-        void lifecycle.stop().finally(() => server.close(() => {
-            void diagnostics.stop().then(() => database.destroy()).finally(() => process.exit(0));
+        const code = reason === 'launcher_gone' ? 1 : 0;
+        void lifecycle.stop(reason).finally(() => server.close(() => {
+            void diagnostics.stop().then(() => database.destroy()).finally(() => process.exit(code));
         }));
-        setTimeout(() => process.exit(0), 5000).unref();
+        setTimeout(() => process.exit(code), 5000).unref();
     };
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.removeListener('disconnect', exitIfOrphaned);
+    onShutdownRequest(shutdown);
 }
 
 bootstrap().catch((err: unknown) => {

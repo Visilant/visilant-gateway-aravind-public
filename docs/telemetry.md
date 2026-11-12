@@ -124,12 +124,33 @@ The phone may not send these types.
 | --- | --- | --- |
 | `gateway.started` | Start-up | `gateway_version`, `uptime_s`, `outbox_backlog` (unsent rows) |
 | `gateway.heartbeat` | Every 60 s | Same as `gateway.started` |
-| `gateway.stopped` | Clean shutdown | Same as `gateway.started` |
-| `gateway.unclean_shutdown` | Start-up, when the last of the three rows above to be written is not `gateway.stopped` | `last_heartbeat_at`, `restarted_at`, `downtime_s` |
+| `gateway.stopped` | Clean shutdown | Same as `gateway.started`, plus `reason`: `launcher`, `launcher_gone`, `SIGTERM` or `SIGINT` |
+| `gateway.unclean_shutdown` | Start-up, when the last of the three rows above to be written is not `gateway.stopped` | `last_heartbeat_at`, `restarted_at`, `downtime_s`, `host_restarted` (the computer booted after the last heartbeat: a power cut or an OS restart rather than the gateway alone; from the wall clock, so approximate) |
 | `ai.assessed` | `POST /captures` with a valid `ai_assessment` | `gateway_capture_id`, `laterality`, `light`, `assessment` (the `AiAssessment` as received). `capture_id` is the phone's `Idempotency-Key`, or the gateway's capture ID when there was none. |
 
 A power cut in the first minute leaves `gateway.started` as the last row written, so that is
 also reported as an unclean shutdown. `last_heartbeat_at` is then the start time.
+
+### How a stop is reported on Windows
+
+On Windows a signal does not reach the gateway: `child.kill()` is `TerminateProcess`, and
+no shutdown code runs. So the launcher asks over the IPC channel it already has
+(`{ "type": "gateway.shutdown" }`, `src/shutdown.ts`), waits up to 8 s, and only then
+ends the process. When the launcher itself goes away, the gateway stops cleanly too.
+
+| What happens | Reported as |
+| --- | --- |
+| The launcher is stopped (Ctrl+C in its console, or a signal where signals exist) | `gateway.stopped`, `reason: "launcher"` |
+| The launcher process ends or is killed (Task Manager, `Stop-Process` on the launcher) | `gateway.stopped`, `reason: "launcher_gone"` |
+| The gateway does not stop within 8 s of the launcher's request | `gateway.unclean_shutdown` at the next start; the launcher logs it |
+| The gateway process itself is killed (Task Manager on it, `uninstall.ps1`'s `Stop-Process -Force`, a crash) | `gateway.unclean_shutdown`, `host_restarted: false` |
+| Windows restarts or shuts down, or the power goes | `gateway.unclean_shutdown`, `host_restarted: true` |
+
+Windows ends a background process at OS shutdown without a message it can act on, so an
+OS restart is always reported as unclean; `host_restarted` is what tells it from a crash.
+`Stop-ScheduledTask` ends the task's PowerShell process, not the launcher under it. The
+IPC path was tested on macOS with the built gateway; the Windows rows above follow from
+how Windows ends processes and have not been run on a Windows computer.
 
 ## Push to central
 

@@ -63,7 +63,7 @@ test('a heartbeat with no stop after it means the last run ended without a shutd
     await second.start(); second.stopTimer();
     expect(await types()).toEqual(['gateway.started', 'gateway.heartbeat', 'gateway.unclean_shutdown', 'gateway.started']);
     const unclean = JSON.parse((await events())[2].payload);
-    expect(unclean).toEqual({ last_heartbeat_at: heartbeat.occurred_at, restarted_at: expect.any(String), downtime_s: expect.any(Number) });
+    expect(unclean).toEqual({ last_heartbeat_at: heartbeat.occurred_at, restarted_at: expect.any(String), downtime_s: expect.any(Number), host_restarted: expect.any(Boolean) });
     expect(unclean.restarted_at >= heartbeat.occurred_at).toBe(true);
     expect(unclean.downtime_s).toBeGreaterThanOrEqual(0);
 });
@@ -146,4 +146,29 @@ test('a clean stop written after a heartbeat with a clock ahead is not an unclea
     await repository.insertOrIgnore([lifecycleRow('gateway.stopped', real)]);
     await lifecycle().start();
     expect(await types()).not.toContain('gateway.unclean_shutdown');
+});
+
+test('gateway.stopped says why the gateway stopped', async () => {
+    const gateway = lifecycle();
+    await gateway.start();
+    await gateway.stop('launcher');
+    const stopped = (await events()).find(e => e.type === 'gateway.stopped')!;
+    expect(JSON.parse(stopped.payload)).toMatchObject({ reason: 'launcher' });
+});
+
+// A Windows restart or a power cut takes the whole computer down; a crash of the gateway
+// process alone does not. Central can tell them apart.
+test.each([[true, 30], [false, 86_400]])('an unclean shutdown says whether the computer restarted since (%s)', async (restarted, uptimeSeconds) => {
+    const first = lifecycle();
+    await first.start(); first.stopTimer();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const os = require('os') as typeof import('os');
+    const uptime = jest.spyOn(os, 'uptime').mockReturnValue(uptimeSeconds);
+    try {
+        const last = (await events()).at(-1)!;
+        jest.spyOn(Date, 'now').mockReturnValue(Date.parse(last.occurred_at) + 60_000);
+        await lifecycle().start();
+    } finally { jest.restoreAllMocks(); uptime.mockRestore(); }
+    const unclean = JSON.parse((await events()).find(e => e.type === 'gateway.unclean_shutdown')!.payload);
+    expect(unclean.host_restarted).toBe(restarted);
 });
