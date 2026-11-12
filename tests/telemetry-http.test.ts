@@ -207,6 +207,35 @@ describe('rejections', () => {
         expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/operation\.failed.*payload\.operation/));
     });
 
+    // A key name is client text like any value: it can hold a name or a forged log line.
+    test('never echoes or logs a client-sent key name; returns only the event index, our field path and a reason', async () => {
+        const key = 'SYNTHETIC PATIENT NAME\n2026-11-12 ERROR forged line';
+        const bad = phoneEvent('device.health', { payload: { ...PAYLOADS['device.health'].payload, [key]: 1 } });
+        const response = await post({ events: [phoneEvent('app.started'), bad] }, null);
+        expect(response.status).toBe(400);
+        expect(response.text).not.toContain('SYNTHETIC PATIENT NAME');
+        expect(response.text).not.toContain('forged');
+        expect(response.json).toEqual({ error: 'telemetry request failed validation', details: [{ event: 1, field: 'payload.<unknown key>', reason: 'unknown_key' }] });
+        const logged = JSON.stringify([logger.warn.mock.calls, logger.info.mock.calls, logger.error.mock.calls]);
+        expect(logged).not.toContain('SYNTHETIC PATIENT NAME');
+        expect(logged).not.toContain('forged');
+        expect(logger.warn).toHaveBeenCalledWith('telemetry rejected: event 1 (device.health) payload.<unknown key> unknown_key');
+    });
+
+    test('a bad value in a known field names the field and a fixed reason only', async () => {
+        const bad = phoneEvent('device.health', { payload: { ...PAYLOADS['device.health'].payload, battery_pct: 101 } });
+        const response = await post({ events: [bad] });
+        expect(response.json.details).toEqual([{ event: 0, field: 'payload.battery_pct', reason: 'invalid' }]);
+        const missing = phoneEvent('device.health', { payload: undefined });
+        expect((await post({ events: [missing] })).json.details).toEqual([{ event: 0, field: 'payload', reason: 'missing' }]);
+    });
+
+    test('an unknown key on the batch itself is reported without its name', async () => {
+        const response = await post({ events: [phoneEvent('app.started')], 'SYNTHETIC-KEY': 1 });
+        expect(response.json.details).toEqual([{ event: null, field: '<unknown key>', reason: 'unknown_key' }]);
+        expect(response.text).not.toContain('SYNTHETIC-KEY');
+    });
+
     test('does not log a type it does not know, because a type is free text until it is checked', async () => {
         await post({ events: [phoneEvent('device.health', { type: 'SYNTHETIC-PATIENT' })] });
         expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('SYNTHETIC-PATIENT');

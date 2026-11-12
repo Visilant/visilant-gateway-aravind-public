@@ -182,9 +182,10 @@ patient's `.dcm` at the site, on purpose. Patient identity never enters a record
 - Crashes carry the exception class, an error code and code-only frames. The exception
   message is never sent.
 - `ai.assessed` carries the assessment, never the worklist entry.
-- A rejected value is never returned and never logged. The log line is
-  `telemetry rejected: <type> <field path>`, and the type is logged only when it is one
-  of the types above.
+- A rejected value is never returned and never logged, and neither is a key name the
+  client sent: an unknown key is `<unknown key>`. The log line is
+  `telemetry rejected: event <index> (<type>) <field path> <reason>`, and the type is
+  logged only when it is one of the types above.
 - A body that is not valid JSON is answered with a fixed message; the parser's message,
   which quotes the body, is not logged.
 

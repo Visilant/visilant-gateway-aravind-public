@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { once } from 'events';
 import type { ValidationError } from 'class-validator';
-import { Authorized, Body, CurrentUser, Get, HttpError, JsonController, OnUndefined, Post, QueryParams, Req, Res, UnauthorizedError } from 'routing-controllers';
+import { Authorized, BadRequestError, Body, CurrentUser, Get, HttpError, JsonController, OnUndefined, Post, QueryParams, Req, Res, UnauthorizedError } from 'routing-controllers';
 import { Inject, Service } from 'typedi';
 import { ANONYMOUS_REQUESTS_PER_MINUTE, PHONE_EVENT_TYPES, TelemetryBatchDto, TelemetryExportQueryDto, TelemetryIngestResultDto } from '../../application/dto';
 import { TelemetryService, TelemetrySignInRequiredError } from '../../application/services';
@@ -43,18 +43,33 @@ export class TelemetryController {
                 throw new HttpError(429, `more than ${ANONYMOUS_REQUESTS_PER_MINUTE} telemetry requests a minute without sign-in; wait, or sign in`);
             }
         }
-        let batch: TelemetryBatchDto;
-        try {
-            batch = validateDto(TelemetryBatchDto, body);
-        } catch (err) {
-            this.logger.warn(`telemetry rejected: ${describeRejection(body, (err as { errors?: ValidationError[] }).errors ?? [])}`);
-            throw err;
-        }
+        const batch = this.parse(body);
         try {
             return await this.telemetry.ingest(batch.events, authenticated);
         } catch (err) {
             if (err instanceof TelemetrySignInRequiredError) throw new UnauthorizedError(err.message);
             throw err;
+        }
+    }
+
+    private parse(body: unknown): TelemetryBatchDto {
+        try {
+            return validateDto(TelemetryBatchDto, body);
+        } catch (err) {
+            const errors = (err as { errors?: ValidationError[] }).errors;
+            if (!errors) throw err;
+            const rejections = describeRejections(errors);
+            const events = (body as { events?: unknown })?.events;
+            this.logger.warn(`telemetry rejected: ${rejections.slice(0, 5).map((r) => {
+                if (r.event === null) return `batch ${r.field} ${r.reason}`;
+                // A type is logged only when it is one of ours: until checked it is client text.
+                const type = Array.isArray(events) ? (events[r.event] as { type?: unknown } | undefined)?.type : undefined;
+                const known = typeof type === 'string' && (PHONE_EVENT_TYPES as readonly string[]).includes(type);
+                return `event ${r.event} (${known ? type : 'unknown type'}) ${r.field} ${r.reason}`;
+            }).join('; ')}${rejections.length > 5 ? `; and ${rejections.length - 5} more` : ''}`);
+            const error = new BadRequestError('telemetry request failed validation');
+            (error as BadRequestError & { errors?: unknown }).errors = rejections;
+            throw error;
         }
     }
 
@@ -83,22 +98,24 @@ export class TelemetryController {
     }
 }
 
-// The event type and the field path, never a value. A type is logged only when it is
-// one of ours, because until it is checked it is whatever the client sent.
-function describeRejection(body: unknown, errors: ValidationError[]): string {
-    const paths = errors.flatMap((error) => leafPaths(error, []));
-    const events = (body as { events?: unknown })?.events;
-    const described = paths.slice(0, 5).map((path) => {
-        const index = path[0] === 'events' && /^\d+$/.test(path[1] ?? '') ? Number(path[1]) : null;
-        const type = index !== null && Array.isArray(events) ? (events[index] as { type?: unknown } | undefined)?.type : undefined;
-        const known = typeof type === 'string' && (PHONE_EVENT_TYPES as readonly string[]).includes(type);
-        return `${index === null ? 'batch' : known ? type : 'unknown type'} ${path.join('.')}`;
+// What a 400 and the log may say about a rejected field. Key names the client sent
+// are client text, like values, so an unknown key is reported as `<unknown key>`.
+// Every other path segment is one of our DTO property names or an array index.
+export interface TelemetryRejection { event: number | null; field: string; reason: 'unknown_key' | 'missing' | 'invalid' }
+
+export function describeRejections(errors: ValidationError[]): TelemetryRejection[] {
+    return errors.flatMap((error) => leaves(error, [])).map(({ path, error }) => {
+        const unknownKey = !!error.constraints?.whitelistValidation;
+        const segments = unknownKey ? [...path.slice(0, -1), '<unknown key>'] : path;
+        const event = segments[0] === 'events' && /^\d+$/.test(segments[1] ?? '') ? Number(segments[1]) : null;
+        const field = (event === null ? segments : segments.slice(2)).join('.') || 'events';
+        const reason = unknownKey ? 'unknown_key' : error.constraints?.isDefined ? 'missing' : 'invalid';
+        return { event, field, reason };
     });
-    return described.join('; ') + (paths.length > 5 ? `; and ${paths.length - 5} more` : '') || 'malformed batch';
 }
 
-function leafPaths(error: ValidationError, parent: string[]): string[][] {
+function leaves(error: ValidationError, parent: string[]): Array<{ path: string[]; error: ValidationError }> {
     const path = [...parent, error.property];
-    const children = error.children ?? [];
-    return children.length ? children.flatMap((child) => leafPaths(child, path)) : [path];
+    const own = error.constraints && Object.keys(error.constraints).length ? [{ path, error }] : [];
+    return [...own, ...(error.children ?? []).flatMap((child) => leaves(child, path))];
 }
