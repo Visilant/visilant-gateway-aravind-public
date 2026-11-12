@@ -17,3 +17,4 @@ export { ScreeningExpiry } from './ScreeningExpiry';
 export { TelemetryService } from './TelemetryService';
 export { TelemetryLifecycle } from './TelemetryLifecycle';
 export { TelemetryPushWorker } from './TelemetryPushWorker';
+export { TelemetryOutbox } from './TelemetryOutbox';

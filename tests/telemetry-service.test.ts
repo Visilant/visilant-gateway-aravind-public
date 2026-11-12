@@ -15,7 +15,7 @@ beforeEach(async () => {
     database = new DataSource(buildDataSourceOptions(':memory:'));
     await database.initialize(); await database.runMigrations();
     config = Object.assign(new GatewayConfig(), { telemetry: Object.assign(new TelemetryConfig(), { enabled: true, site_id: 'VC1' }) });
-    service = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never);
+    service = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never, { acceptsDeviceHealth: () => true } as never);
 });
 afterEach(() => database.destroy());
 
@@ -40,7 +40,7 @@ test('a batch of only duplicates does not trigger a push', async () => {
 
 test('gateway_id is generated once and survives a new service instance', async () => {
     const first = await service.gatewayId();
-    const again = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never);
+    const again = new TelemetryService(config, logger as never, new TelemetryRepository(database), new SettingRepository(database), push as never, { acceptsDeviceHealth: () => true } as never);
     expect(await again.gatewayId()).toBe(first);
 });
 

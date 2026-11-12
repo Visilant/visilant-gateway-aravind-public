@@ -46,6 +46,10 @@ export class TelemetryRepository {
         return query.orderBy('t.event_id', 'ASC').limit(limit).getMany();
     }
 
+    countAll(): Promise<number> {
+        return this.repo.count();
+    }
+
     countUnsent(): Promise<number> {
         return this.repo.createQueryBuilder('t').where('t.sent_at IS NULL').getCount();
     }

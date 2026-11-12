@@ -5,6 +5,7 @@ import { TelemetryEventEntity } from '../../infrastructure/database';
 import { SettingRepository, TelemetryRepository } from '../../infrastructure/database/repositories';
 import type { Logger } from '../../infrastructure/logger';
 import { CONFIG, LOGGER } from '../../tokens';
+import { TelemetryOutbox } from './TelemetryOutbox';
 import { PUSH_BATCH_SIZE, TelemetryPushWorker } from './TelemetryPushWorker';
 import type { GatewayEventType, TelemetryEventDto, TelemetryIngestResultDto } from '../dto';
 
@@ -23,6 +24,7 @@ export class TelemetryService {
         private readonly repository: TelemetryRepository,
         private readonly settings: SettingRepository,
         private readonly push: TelemetryPushWorker,
+        private readonly outbox: TelemetryOutbox,
     ) {}
 
     get enabled(): boolean {
@@ -46,7 +48,14 @@ export class TelemetryService {
     async ingest(events: TelemetryEventDto[]): Promise<TelemetryIngestResultDto> {
         const gatewayId = await this.gatewayId();
         const receivedAt = new Date().toISOString();
-        const rows = events.map((event) => Object.assign(new TelemetryEventEntity(), {
+        const result: TelemetryIngestResultDto = { accepted: [], duplicate: [], dropped: [] };
+        // The outbox is full of rows central has not confirmed: shed device.health only.
+        const kept = this.outbox.acceptsDeviceHealth() ? events : events.filter((event) => {
+            if (event.type !== 'device.health') return true;
+            result.dropped.push(event.event_id);
+            return false;
+        });
+        const rows = kept.map((event) => Object.assign(new TelemetryEventEntity(), {
             event_id: event.event_id,
             schema_version: event.schema_version,
             type: event.type,
@@ -63,7 +72,6 @@ export class TelemetryService {
         }));
 
         const inserted = await this.repository.insertOrIgnore(rows);
-        const result: TelemetryIngestResultDto = { accepted: [], duplicate: [], dropped: [] };
         rows.forEach((row, i) => (inserted[i] ? result.accepted : result.duplicate).push(row.event_id));
 
         // A full batch is waiting: send now instead of at the next minute. Not awaited,
