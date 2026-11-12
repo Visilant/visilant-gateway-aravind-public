@@ -27,8 +27,9 @@ export class ErrorHandlerMiddleware implements ExpressErrorMiddlewareInterface {
     constructor(@Inject(LOGGER) private readonly logger: Logger) {}
 
     error(error: unknown, request: Request, response: Response, _next: NextFunction): void {
-        const status = error instanceof HttpError ? error.httpCode : multerStatus(error);
-        const message = error instanceof Error ? error.message : 'unexpected error';
+        const parser = bodyParserError(error);
+        const status = error instanceof HttpError ? error.httpCode : parser?.status ?? multerStatus(error);
+        const message = parser?.message ?? (error instanceof Error ? error.message : 'unexpected error');
 
         if (status >= 500) {
             this.logger.error(`${request.method} ${request.path} failed: ${message}`);
@@ -63,4 +64,13 @@ export class ErrorHandlerMiddleware implements ExpressErrorMiddlewareInterface {
 function multerStatus(error: unknown): number {
     if (!(error instanceof MulterError)) return 500;
     return error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+}
+
+// express.json() failures. Its message for bad JSON quotes the body, which can be
+// patient data, so the client and the log get a fixed message instead.
+function bodyParserError(error: unknown): { status: number; message: string } | null {
+    const type = (error as { type?: unknown } | null)?.type;
+    if (type === 'entity.too.large') return { status: 413, message: 'request body is too large' };
+    if (type === 'entity.parse.failed') return { status: 400, message: 'request body is not valid JSON' };
+    return null;
 }
