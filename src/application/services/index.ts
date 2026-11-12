@@ -15,3 +15,4 @@ export { SystemService } from './SystemService';
 
 export { ScreeningExpiry } from './ScreeningExpiry';
 export { TelemetryService } from './TelemetryService';
+export { TelemetryLifecycle } from './TelemetryLifecycle';

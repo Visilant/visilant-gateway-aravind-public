@@ -23,6 +23,7 @@ const input = {
 } as CreateCaptureDto;
 const builder = { build: jest.fn() };
 const worker = { tick: jest.fn().mockResolvedValue({ sent: 0, failed: 0 }) };
+const telemetry = { record: jest.fn().mockResolvedValue(null) };
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
 async function upload(name: string): Promise<string> {
@@ -42,7 +43,7 @@ beforeEach(async () => {
     repository = new CaptureRepository(database);
     storage = new LocalDiskStorage({ ...config, storage_root: root });
     builder.build.mockImplementation(async (_upload, _tags, target) => { await fs.writeFile(target, 'DICOM'); });
-    service = new CaptureService(config, logger as never, repository, builder as never, storage, worker as never, { validateCapture: jest.fn().mockResolvedValue(undefined), touch: jest.fn().mockResolvedValue(undefined) } as never);
+    service = new CaptureService(config, logger as never, repository, builder as never, storage, worker as never, { validateCapture: jest.fn().mockResolvedValue(undefined), touch: jest.fn().mockResolvedValue(undefined) } as never, telemetry as never);
 });
 afterEach(async () => {
     await database.destroy();
@@ -138,9 +139,45 @@ it('lists by study and status, computes file presence, and omits server file key
 
 it('a failed screening activity update does not fail a capture that is already stored', async () => {
     const screenings = { validateCapture: jest.fn().mockResolvedValue(undefined), touch: jest.fn().mockRejectedValue(Error('SQLITE_BUSY')) };
-    service = new CaptureService(config, logger as never, repository, builder as never, storage, worker as never, screenings as never);
+    service = new CaptureService(config, logger as never, repository, builder as never, storage, worker as never, screenings as never, telemetry as never);
     const created = await service.create(input, await upload('busy'), null, 'client-busy');
     expect(await repository.findById(created.id)).not.toBeNull();
     expect(worker.tick).toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not record activity'));
+});
+
+describe('ai.assessed telemetry', () => {
+    const assessment = { schemaVersion: 1 as const, status: 'unavailable' as const, reason: 'eye_not_detected' as const, modelRevision: 'models-v1', modelManifestSha256: 'a'.repeat(64), assessedAt: '2026-10-08T12:00:00.000Z' };
+
+    it('writes ai.assessed with the capture and screening ids and the assessment, once per capture', async () => {
+        await database.query(`INSERT INTO screening (id, source_scope, order_key, accession_number, study_instance_uid, capture_ids, created_at, last_activity_at)
+            VALUES ('screening-1', 'scope', 'order', 'ACC1', '1.2.3', '["client-ai"]', '2026-11-12T00:00:00.000Z', '2026-11-12T00:00:00.000Z')`);
+        const withAi = { ...input, screening_id: 'screening-1', ai_assessment: assessment } as CreateCaptureDto;
+        const created = await service.create(withAi, await upload('ai'), null, 'client-ai');
+        expect(telemetry.record).toHaveBeenCalledTimes(1);
+        expect(telemetry.record).toHaveBeenCalledWith('ai.assessed',
+            { gateway_capture_id: created.id, laterality: 'R', light: 'WHITE', assessment },
+            { capture_id: 'client-ai', screening_id: 'screening-1' });
+        // Never the worklist entry: that is where the patient is.
+        expect(JSON.stringify(telemetry.record.mock.calls)).not.toMatch(/ACC1|patient/);
+        await service.create(withAi, await upload('ai-again'), null, 'client-ai');
+        expect(telemetry.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the gateway capture id when the phone sent no idempotency key', async () => {
+        const created = await service.create({ ...input, ai_assessment: assessment } as CreateCaptureDto, await upload('no-key'), null);
+        expect(telemetry.record.mock.calls[0][2]).toEqual({ capture_id: created.id, screening_id: null });
+    });
+
+    it('writes nothing for a capture without an assessment', async () => {
+        await service.create(input, await upload('plain'), null, 'client-plain');
+        expect(telemetry.record).not.toHaveBeenCalled();
+    });
+
+    it('a telemetry failure never fails the capture', async () => {
+        telemetry.record.mockRejectedValueOnce(new Error('synthetic database error'));
+        const created = await service.create({ ...input, ai_assessment: assessment } as CreateCaptureDto, await upload('fails'), null, 'client-fails');
+        expect(created.status).toBe(CaptureStatus.PENDING);
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/ai\.assessed/));
+    });
 });

@@ -21,6 +21,7 @@ import { CaptureCreatedDto, CaptureListQueryDto, CaptureRowDto, CreateCaptureDto
 import { LIGHT_MODES, Laterality, LightMode } from '../dto/capture.dto';
 import { ScreeningService } from './ScreeningService';
 import { SyncWorker } from './SyncWorker';
+import { TelemetryService } from './TelemetryService';
 
 @Service()
 export class CaptureService {
@@ -32,6 +33,7 @@ export class CaptureService {
         private readonly storage: LocalDiskStorage,
         private readonly syncWorker: SyncWorker,
         private readonly screenings: ScreeningService,
+        private readonly telemetry: TelemetryService,
     ) {}
 
     async list(query: CaptureListQueryDto): Promise<CaptureRowDto[]> {
@@ -158,6 +160,20 @@ export class CaptureService {
             this.logger.warn(`could not record activity for capture ${capture.id}; screening expiry may run early: ` +
                 `${err instanceof Error ? err.message : String(err)}`);
         });
+
+        // The AI result may leave the site, joined by capture_id. The worklist entry,
+        // where the patient is, never goes with it.
+        if (input.ai_assessment) {
+            await this.telemetry.record('ai.assessed', {
+                gateway_capture_id: capture.id,
+                laterality: input.laterality,
+                light: input.light ?? null,
+                assessment: input.ai_assessment,
+            }, { capture_id: clientCaptureId ?? capture.id, screening_id: input.screening_id ?? null }).catch((err: unknown) => {
+                this.logger.warn(`could not write ai.assessed telemetry for capture ${capture.id}; the capture is queued as normal: ` +
+                    `${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
 
         this.logger.info(`capture ${capture.id} queued`);
 

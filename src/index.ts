@@ -8,7 +8,7 @@ import { loadConfig } from './config';
 import { createLogger } from './infrastructure/logger';
 import { createDatabase } from './infrastructure/database';
 import { CaptureRepository } from './infrastructure/database/repositories';
-import { DiagnosticsService, RetentionService, ScreeningExpiry, SyncWorker, SystemService } from './application/services';
+import { DiagnosticsService, RetentionService, ScreeningExpiry, SyncWorker, SystemService, TelemetryLifecycle } from './application/services';
 import { GatewayServer } from './presentation/server';
 import { CONFIG, DATABASE, LOGGER, RECORDER } from './tokens';
 import { WorklistSettingsService } from './application/services/WorklistSettingsService';
@@ -52,6 +52,12 @@ async function bootstrap(): Promise<void> {
     });
     await Container.get(DiagnosticsService).restoreAtBoot();
 
+    // Before the server: an unclean-shutdown row must be written before anything new.
+    const lifecycle = Container.get(TelemetryLifecycle);
+    await lifecycle.start().catch((err: unknown) => {
+        logger.error(`telemetry: start-up events could not be written; the gateway runs without them: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
     const server = await Container.get(GatewayServer).start();
 
     const worker = Container.get(SyncWorker);
@@ -66,9 +72,11 @@ async function bootstrap(): Promise<void> {
         worker.stop();
         system.stop();
         expiry.stop();
-        server.close(() => {
+        // gateway.stopped first: server.close can wait on idle phone connections until
+        // the forced exit below, and without the row the next start reports a crash.
+        void lifecycle.stop().finally(() => server.close(() => {
             void diagnostics.stop().then(() => database.destroy()).finally(() => process.exit(0));
-        });
+        }));
         setTimeout(() => process.exit(0), 5000).unref();
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));

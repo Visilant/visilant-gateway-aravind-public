@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import type { Server } from 'http';
@@ -10,6 +10,7 @@ import { buildDataSourceOptions } from '../src/infrastructure/database/options';
 import { AuthService } from '../src/application/services/AuthService';
 import { SettingEntity, TelemetryEventEntity, UserRole } from '../src/infrastructure/database/entities';
 import { GatewayConfig, TelemetryConfig } from '../src/config';
+import { DicomBuilder } from '../src/infrastructure/dicom';
 import { DEVICE_ID, PAYLOADS, SESSION_ID, phoneEvent } from './fixtures/telemetry';
 
 let server: Server, database: DataSource, directory: string, base: string, config: GatewayConfig;
@@ -30,12 +31,13 @@ beforeEach(async () => {
     directory = mkdtempSync(path.join(tmpdir(), 'telemetry-http-')); Container.reset();
     database = new DataSource(buildDataSourceOptions(':memory:')); await database.initialize(); await database.runMigrations();
     config = Object.assign(new GatewayConfig(), {
-        centre_code: 'SYNTHETIC', listen_port: 0, storage_root: directory, study_uid_root: '1.2.3',
+        centre_code: 'SYNTHETIC', listen_port: 0, storage_root: directory, study_uid_root: '1.2.3', send_immediately: false,
         mwl: { host: 'synthetic', port: 104, called_ae: 'W', calling_ae: 'V' },
         telemetry: Object.assign(new TelemetryConfig(), { enabled: true, site_id: 'VC-SYNTH-01' }),
     });
     Container.set(CONFIG, config); Container.set(DATABASE, database); Container.set(LOGGER, logger);
     Container.set(AuthService, { authenticate: async (header: string) => header === 'Bearer OPERATOR' ? { id: null, role: UserRole.OPERATOR } : header === 'Bearer ADMIN' ? { id: null, role: UserRole.ADMIN } : null } as never);
+    Container.set(DicomBuilder, { build: async (_input: string, _tags: unknown, target: string) => { await fs.writeFile(target, 'SYNTHETIC DICOM'); } } as never);
     server = await Container.get(GatewayServer).start(); base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 afterEach(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await database.destroy(); Container.reset(); rmSync(directory, { recursive: true, force: true }); });
@@ -153,4 +155,18 @@ describe('rejections', () => {
         await post({ events: [phoneEvent('device.health', { type: 'SYNTHETIC-PATIENT' })] });
         expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('SYNTHETIC-PATIENT');
     });
+});
+
+test('POST /captures with an AI assessment writes ai.assessed, without the worklist entry', async () => {
+    const assessment = { schemaVersion: 1, status: 'unavailable', reason: 'eye_not_detected', modelRevision: 'models-v1', modelManifestSha256: 'a'.repeat(64), assessedAt: '2026-10-08T12:00:00.000Z' };
+    const form = new FormData();
+    form.append('file', new Blob(['synthetic JPEG'], { type: 'image/jpeg' }), 'test.jpg');
+    form.append('worklist_entry', JSON.stringify({ accession_number: 'SYNTH-ACC', study_instance_uid: '1.2.3.4', patient_id: 'SYNTH-MRN', patient_name: 'SYNTHETIC^PATIENT' }));
+    form.append('laterality', 'L'); form.append('light', 'WHITE'); form.append('ai_assessment', JSON.stringify(assessment));
+    const response = await fetch(base + '/captures', { method: 'POST', headers: { Authorization: 'Bearer OPERATOR', 'Idempotency-Key': 'phone-capture-1' }, body: form });
+    expect(response.status).toBe(200);
+    const [row] = await rows();
+    expect(row).toMatchObject({ type: 'ai.assessed', capture_id: 'phone-capture-1', device_id: null, site_id: 'VC-SYNTH-01' });
+    expect(JSON.parse(row.payload)).toEqual({ gateway_capture_id: (await response.json() as any).data.id, laterality: 'L', light: 'WHITE', assessment });
+    expect(JSON.stringify(row)).not.toMatch(/SYNTH-ACC|SYNTH-MRN|PATIENT/);
 });
