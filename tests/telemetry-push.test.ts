@@ -125,17 +125,28 @@ test('backoff doubles from 1 min to a 30 min ceiling', () => {
     expect([1, 2, 3, 4, 5, 6, 7, 20].map(n => pushBackoffMs(n) / 60_000)).toEqual([1, 2, 4, 8, 16, 30, 30, 30]);
 });
 
+// No guessed port: this server is ours and stays open for the whole test, and it cuts
+// every connection, so the failure is certain and nothing else can answer on the port.
 test('a network failure logs the error code', async () => {
     await seed(1);
-    // A port that was free a moment ago: nothing listens there.
-    const closed = createServer();
-    await new Promise<void>(resolve => closed.listen(0, '127.0.0.1', resolve));
-    const port = (closed.address() as { port: number }).port;
-    await new Promise<void>(resolve => closed.close(() => resolve()));
-    config.telemetry.central_url = `http://127.0.0.1:${port}`;
+    const cutter = createServer();
+    cutter.on('connection', (socket) => socket.destroy());
+    await new Promise<void>(resolve => cutter.listen(0, '127.0.0.1', resolve));
+    try {
+        config.telemetry.central_url = `http://127.0.0.1:${(cutter.address() as { port: number }).port}`;
+        await worker().tick();
+        expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/could not reach central \((UND_ERR_SOCKET|ECONNRESET|EPIPE)\)/));
+        expect(await unsent()).toBe(1);
+    } finally {
+        await new Promise<void>(resolve => cutter.close(() => resolve()));
+    }
+});
+
+test('a refused connection is reported by its code', async () => {
+    await seed(1);
+    jest.spyOn(global, 'fetch').mockRejectedValueOnce(Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) }));
     await worker().tick();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/ECONNREFUSED/));
-    expect(await unsent()).toBe(1);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/could not reach central \(ECONNREFUSED\)/));
 });
 
 test('a reply without event_ids is a failure and marks nothing', async () => {
