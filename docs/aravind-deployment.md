@@ -4,6 +4,41 @@ How the gateway is set up at Aravind, what was learned during installation, and 
 still open. Host addresses are left out of this public document. They are in the
 gateway's `config.json` on site and with Aravind IT.
 
+## Status
+
+The gateway ran end to end with Aravind IT in a remote session on 9 October 2026: the
+phone read the worklist, and the photographs and the AI result arrived in the PACS. It is
+**not in production**. The worklist filter and the go-live list below are still open.
+
+Aravind tests each release the same way: Visilant sends a built bundle
+([windows-setup.md](windows-setup.md)), Aravind IT installs it on their own computer, and
+Visilant joins by remote session when needed. Visilant has no computer of its own that can
+reach Aravind's worklist or PACS, so every DICOM setting here was confirmed on Aravind's
+side, not from a specification.
+
+## How the integration works at Aravind
+
+- **Worklist.** The gateway sends a DICOM C-FIND to a worklist server that Aravind hosts.
+  That server reads Aravind's own application API; the gateway never calls that API. The
+  connection has no username or password.
+- **Matching images to orders.** By **Accession Number** `(0008,0050)`, which is the
+  unique order number in Aravind's application and the key their PACS already uses.
+- **Procedure status.** The gateway does not send MPPS. The gateway hides an order once
+  its screening is complete ([worklist.md](worklist.md)); whether Aravind's worklist server
+  also removes it was not confirmed.
+- **Images.** Ophthalmic Photography objects, one series per eye and light
+  ([dicom-output.md](dicom-output.md)).
+- **AI result.** JSON text in the private tag `(0011,1001)` of each white-light image.
+  The gateway does not make a PDF.
+
+## Requested by Aravind, not in this repository
+
+- **A PDF report as well as the text result.** Aravind's application needs development to
+  show the text, so they asked to receive both. The PDF layout is not yet agreed.
+- **Visual acuity from Aravind's application** (VA and BCVA), so staff do not type it on
+  the phone. Because the gateway rejects unknown keys, any such field must be added to the
+  gateway first, as optional ([CONTRIBUTING.md](../CONTRIBUTING.md#contract-with-the-capture-app)).
+
 ## Systems
 
 | Role | System | AE title | Port |
@@ -39,7 +74,10 @@ What we learned:
 Recommended: Aravind IT schedules the anterior-segment orders for this device to
 **Scheduled Station AE Title `VISILANT`**. Then set
 `"scheduled_station_ae": "VISILANT"` in `mwl` and **remove** the `requested_procedure_id`
-key (an empty string `""` stops the gateway from starting). See [worklist.md](worklist.md#the-three-filters).
+key (an empty string `""` stops the gateway from starting). If filters were saved in the
+dashboard, they override these three keys in the file: change them in **Diagnostics →
+Explain this worklist** instead, or select **Restore config-file filters** before
+restarting. See [worklist.md](worklist.md#the-three-filters).
 
 Use **Diagnostics → Explain this worklist** to check why rows are missing and preview
 filter changes before saving them. If an anterior order has an empty Accession Number,
