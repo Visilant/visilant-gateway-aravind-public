@@ -25,7 +25,8 @@ eye (`L` or `R`) and optional details. See [api.md](api.md#capture-upload).
    An upright baseline JPEG goes straight to `img2dcm` without changes. Most phone photos
    carry a rotation tag, so in practice ImageMagick runs on most photos.
 3. **Build.** `img2dcm -oph` writes an Ophthalmic Photography object with the tags below.
-4. **Save and queue.** The `.dcm` file goes to `storage_root/<accession>/<capture id>.dcm`
+4. **Save and queue.** The `.dcm` file goes to `storage_root/<accession>/<gateway capture id>.dcm`
+   (characters in the accession other than letters, digits, `.`, `_` and `-` become `_`)
    and a row with status `PENDING` goes into SQLite. The phone gets HTTP 200.
 
 The DICOM file is built **at upload time**, not at send time. The patient details live
@@ -89,7 +90,7 @@ When the phone does not send `light`, the illumination and filter sequences are 
 
 ## UIDs
 
-All UIDs live under `study_uid_root` (Visilant's root is `1.2.826.0.1.3680043.10.1338`).
+All UIDs the gateway derives live under `study_uid_root` (Visilant's root is `1.2.826.0.1.3680043.10.1338`).
 `deriveUid(seed, root)` in `src/infrastructure/dicom/util.ts` turns a SHA-256 of the seed
 into digits and appends them to the root, to a total of at most 64 characters. The same
 seed always gives the same UID.
@@ -97,8 +98,8 @@ seed always gives the same UID.
 | UID | Source |
 |---|---|
 | Study Instance UID | The worklist's own UID. Only if the worklist has none: derived from `study:<accession>` |
-| Series Instance UID | Derived from `series:<study UID>:<eye>:<light>` |
-| SOP Instance UID | Derived from `instance:<phone's capture ID>` |
+| Series Instance UID | Derived from `series:<study UID>:<eye>:<light>` (`NONE` when no light is given) |
+| SOP Instance UID | Derived from `instance:<Idempotency-Key>` (the phone's capture ID). If the phone sends no `Idempotency-Key`, from the gateway's own capture ID, so a repeated upload is then a new image |
 
 Derived UIDs make delivery **idempotent**: a re-sent photograph has the same SOP Instance
 UID, so the PACS sees a repeat, not a new image.
@@ -131,8 +132,9 @@ Some PACS remove private tags. Check with the site's PACS whether they keep them
 
 ## Delivery to the PACS
 
-`SyncWorker` runs every `sync_interval_seconds` (default 30), and also straight after an
-upload when `send_immediately` is `true`.
+`SyncWorker` runs every `sync_interval_seconds` (default 30), straight after an
+upload when `send_immediately` is `true`, and on demand with `POST /captures/sync`. Each
+run claims at most 10 due captures, oldest first.
 
 1. It claims `PENDING` rows that are due and marks them `SENDING`.
 2. For each one it runs
@@ -146,7 +148,8 @@ upload when `send_immediately` is `true`.
 5. After `max_send_attempts` failures (default 20) the row becomes `FAILED`. It stays on
    disk and appears on the operator page and in `/health`. An operator can press **Retry**
    (`POST /captures/:id/retry`). Retry does not reset the attempt count, so each Retry
-   gives one more attempt.
+   gives one more attempt. Retry also works on a `SENT` capture: it is sent again with
+   the same SOP Instance UID.
 6. A capture whose `.dcm` file is missing becomes `FAILED` at once.
 
 When the gateway starts, rows left in `SENDING` (for example after a power cut) go back to
@@ -170,12 +173,13 @@ Rows are never deleted. They are the record of what was sent.
 2. Add the field to `DicomImageTags` in `DicomBuilder.ts`.
 3. Fill it in `CaptureService.toTags`.
 4. Add it to `buildKeyArgs` in `DicomBuilder.ts` as `['DicomKeyword', value]`. Use the
-   DCMTK keyword (as in `dcmdump` output). An `undefined` value is left out: `img2dcm -oph`
+   DCMTK keyword (as in `dcmdump` output). An `undefined` or empty value is left out: `img2dcm -oph`
    then writes it empty only if it is a Type 2 attribute of the Ophthalmic Photography
    IOD. Anything else is simply missing.
 5. Test: extend `tests/dicom-builder.test.ts` for the arguments. For a test that builds a
-   real file, follow the `TEST_DCMTK` tests in `tests/dicom-inspector.test.ts` and
-   `tests/assessment.test.ts`, run `TEST_DCMTK=1 npm test`, and look at the file with
+   real file, follow the `TEST_DCMTK` tests in `tests/dicom-inspector.test.ts`,
+   `tests/assessment.test.ts` and `tests/worklist-dicom-integration.test.ts`, run
+   `$env:TEST_DCMTK = '1'; npm test -- --runInBand`, and look at the file with
    `dcmdump <file>.dcm`.
 6. Run `npm run e2e` to check that the local PACS accepts it.
 

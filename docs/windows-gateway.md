@@ -101,8 +101,8 @@ installation. The command detects the installed files and task, starts that exis
 installation if necessary, and opens the saved setup; it never overwrites or upgrades
 an existing deployment. Incomplete/unknown installations require administrator repair.
 An interrupted installer may need administrator repair of its files/task/firewall rule;
-keep the data folder intact. Upgrades still require the existing consistent backup and
-migration procedure. Never delete a database, WAL or capture folder to restart setup.
+keep the data folder intact. There is no upgrade command yet; see "Updating an installed
+gateway" in `docs/troubleshooting.md`. Never delete a database, WAL or capture folder to restart setup.
 
 **Download support report** exports a deliberate allowlist: build identity, platform,
 runtime, setup timestamps, aggregate delivery counts and component health. It excludes
@@ -142,8 +142,8 @@ For an explicitly authorized full test reset, add `-PurgeData -DataDeletionConfi
 Git Bash has the equivalent `bash uninstall.sh --apply --purge-data --confirm-delete-data`.
 Without `--apply` it previews only. The scripts target standard installation paths and
 refuse linked paths or unexpected task/rule ownership. Custom data paths stay untouched.
-Keeping data requires the backup/repair installation procedure; normal setup does not
-overwrite retained data. Never purge a hospital gateway as a routine debugging step.
+With data kept, the installer refuses to install again, and there is no way yet to
+reinstall over kept data. Never purge a hospital gateway as a routine debugging step.
 
 ## Logs and troubleshooting
 
@@ -160,7 +160,9 @@ Both the launcher and the gateway write to the console and to a rotating file in
 
 The folder is readable by administrators only.
 
-Each file rotates at 5 MB and five files are kept, so logs cannot fill the disk. The
+`launcher.log` and `gateway.log` rotate at 5 MB and five files of each are kept.
+`install-<date>.log` (one per installer run) and `firewall.log` are small and are not
+rotated. The
 logs contain no patient data, credentials or DICOM command lines. Check these files
 first when the gateway restarts repeatedly, then send the relevant lines to IT or
 support. Do not delete the data folder to clear logs.

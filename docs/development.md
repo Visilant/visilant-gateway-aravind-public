@@ -164,7 +164,7 @@ Open http://127.0.0.1:8081. Use an empty folder for `GATEWAY_SETUP_DIR`, never
 |---|---|
 | `npm test -- --runInBand` | All Jest tests. The tests that need real DCMTK are skipped |
 | `$env:TEST_DCMTK = '1'; npm test -- --runInBand` | Also builds and reads real DICOM files with DCMTK and ImageMagick |
-| `npm run e2e` | Needs Docker Desktop. Builds the gateway, starts the local archive if needed, and drives two real gateways over HTTP the way the phone does: worklist, upload, delivery, PACS outage, back-off, `FAILED` and retry, power cut during a send, repeated uploads. Add `-- --keep` to keep its folders and logs. The clean-shutdown check is skipped on Windows, which cannot ask a process to shut down gracefully |
+| `npm run e2e` | Needs Docker Desktop, and DCMTK and ImageMagick on `PATH`. Builds the gateway, starts the local archive if needed, and drives two real gateways over HTTP the way the phone does: worklist, upload, delivery, PACS outage, back-off, `FAILED` and retry, power cut during a send, repeated uploads. Add `-- --keep` to keep its folders and logs. The clean-shutdown check is skipped on Windows, which cannot ask a process to shut down gracefully |
 | `npm run check` | Typecheck, tests and build. CI runs the same steps |
 
 Tests live in `tests/`, one file per unit (`worklist-client.test.ts`,
@@ -179,6 +179,11 @@ development computer (not on a gateway at a site).
 ## 4. Database changes
 
 The schema is defined by the entities in `src/infrastructure/database/entities/`.
+
+The migration commands use the database at `data/gateway.db` (or `$env:DATABASE_PATH`),
+not the one named in `config.json`. Bring it up to date first with
+`npm run migration:run`; against an empty or old database the generated migration would
+repeat schema that earlier migrations already create.
 
 1. Change the entity.
 2. Generate the migration: `npm run migration:generate -- migrations/DescribeTheChange`.
@@ -196,9 +201,11 @@ fails, or that loses data, breaks a centre's gateway with no one on site to fix 
 
 ### Change the worklist filter
 
-No code change: edit `mwl.requested_procedure_id`, `mwl.modality` or
-`mwl.scheduled_station_ae` in `config.json` and restart. See
-[worklist.md](worklist.md#the-three-filters).
+No code change. On a running gateway use **Diagnostics → Explain this worklist** in the
+dashboard; it needs no restart. Or edit `mwl.requested_procedure_id`, `mwl.modality` or
+`mwl.scheduled_station_ae` in `config.json` and restart. Filters that were ever saved in
+the dashboard override the file until an administrator presses **Restore config-file
+filters**. See [worklist.md](worklist.md#the-three-filters).
 
 ### Add a worklist filter or a returned field
 

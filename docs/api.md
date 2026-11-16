@@ -4,7 +4,26 @@ The local app talks to the gateway over HTTP. All endpoints except `/health`, `/
 `/refresh` and the static operator page `/ui` require `Authorization: Bearer <token>`.
 `/setup-progress` is used only by the setup wizard on the same computer and takes a
 loopback-only `x-setup-token` instead. Successful application responses
-are wrapped in `{ "data": ... }`. `/health` returns a flat monitoring response.
+are wrapped in `{ "data": ... }`. `/health` returns a flat monitoring response. Binary
+downloads (`/captures/:id/preview`, `/captures/:id/dicom`,
+`/diagnostics/segments/:id/archive`) and `/diagnostics/worklist/support` are not wrapped
+either.
+
+Errors return `{ "error": "<message>" }`. A 400 from validation adds `details`, which
+names the failing fields and never repeats the rejected values. Every 5xx message is
+replaced by `internal error`; the cause is in the gateway log. An unknown route returns
+404 `{ "error": "not found" }`. JSON bodies are limited to 1 MB.
+
+## Setup wizard
+
+| Method | Path | Input / result |
+| --- | --- | --- |
+| `GET` | `/setup-progress` | The setup record plus capture counts (`received`, `sent`, `waiting`, `failed`). |
+| `POST` | `/setup-progress/begin` | Start the record; returns the report. |
+| `POST` | `/setup-progress/complete` | JSON `{ synthetic, viewer, startup }`, all required booleans; 400 with `missing: [...]` while a check is still open. |
+
+All three return 401 unless the gateway was started by the setup launcher (which sets
+`GATEWAY_SETUP_TOKEN`), the caller is on loopback and `x-setup-token` matches.
 
 ## Authentication and worklist
 
@@ -13,7 +32,7 @@ are wrapped in `{ "data": ... }`. `/health` returns a flat monitoring response.
 | `POST` | `/signin` | JSON `{ email, password }`; returns `{ token, refresh_token, user }`. |
 | `POST` | `/refresh` | JSON `{ refresh_token }`; returns a new token pair. |
 | `GET` | `/health` | Database, queue, disk, and C-ECHO checks; 200 healthy, 503 degraded. |
-| `GET` | `/worklist` | Live C-FIND; optional `date`, `patient_id`, `accession_number` query keys. Config adds procedure/modality/station filters; see [worklist.md](worklist.md). |
+| `GET` | `/worklist` | Live C-FIND; optional `date` (`YYYYMMDD`, or a DICOM range such as `YYYYMMDD-YYYYMMDD`, `-YYYYMMDD`, `YYYYMMDD-`), `patient_id`, `accession_number` query keys. Config adds procedure/modality/station filters; see [worklist.md](worklist.md). |
 
 Worklist names and dates remain DICOM-native (`FAMILY^GIVEN`, `YYYYMMDD`). The app formats
 them for display. Send the original worklist object with the capture: a RIS can remove
@@ -27,12 +46,12 @@ ignored on upload, and every other unknown key is still rejected with 400.
 
 | Part | Required | Meaning |
 | --- | --- | --- |
-| `file` | Yes | JPEG, with `image/jpeg` part content type. |
+| `file` | Yes | JPEG, with `image/jpeg` (or `image/jpg`) part content type, at most 32 MiB; larger returns 413. |
 | `worklist_entry` | Yes | JSON string containing the original worklist entry. |
 | `laterality` | Yes | `L` or `R`. |
 | `light` | No | `WHITE`, `BLUE`, or `SLIT`; omit when unknown. |
 | `pupil_dilated` | No | `YES` or `NO`. |
-| `series_description` | No | DICOM series description. |
+| `series_description` | No | DICOM series description, at most 64 characters. |
 | `screening_id` | For manifested submissions | Registered screening ID (same format as the manifest `id`). The `Idempotency-Key` must be one of its declared capture IDs, and the entry's accession, Study UID and scheduled step must match the manifest's order exactly. The echoed `worklist_entry.source_scope` is ignored. |
 | `ai_assessment` | No | Valid assessment JSON; permitted only with `light=WHITE`. |
 
@@ -193,8 +212,8 @@ The gateway writes `ai.assessed` itself when `POST /captures` carries a valid
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/captures` | Recent queue records; filter with `status=PENDING`, `SENDING`, `SENT`, or `FAILED`. |
-| `POST` | `/captures/sync` | Trigger a gateway queue drain; returns sent/failed counts for that tick. |
+| `GET` | `/captures` | The 100 most recent queue records; filter with `status=PENDING`, `SENDING`, `SENT`, or `FAILED`. |
+| `POST` | `/captures/sync` | Trigger a gateway queue drain; returns sent/failed counts for that tick, or `{ sent: 0, failed: 0 }` when a drain is already running. |
 | `POST` | `/captures/:id/retry` | Reset a capture to `PENDING`; subsequent worker delivery retries it. |
 
 ## Operator page endpoints
@@ -288,8 +307,9 @@ included; existing conversion failure behavior and temporary-file cleanup are pr
 ## DICOM output
 
 Captures use Ophthalmic Photography 8 Bit (`1.2.840.10008.5.1.4.1.1.77.1.5.1`), modality
-`OP`, and JPEG Baseline. The builder honors a worklist Study Instance UID and derives
-one from the accession when absent. Eye/light combinations get separate series.
+`OP`, and JPEG Baseline. `GET /worklist` returns the RIS Study Instance UID, or one derived
+from the accession when the RIS sends none; `POST /captures` requires
+`worklist_entry.study_instance_uid` and writes it unchanged. Eye/light combinations get separate series.
 Missing demographics stay empty. AI findings use the documented Visilant private
 creator and JSON element; PACS preservation needs integration verification.
 

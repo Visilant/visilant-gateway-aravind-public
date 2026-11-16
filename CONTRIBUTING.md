@@ -13,7 +13,7 @@ ImageMagick must be on `PATH`. See [docs/development.md](docs/development.md).
 | Install | `npm ci` |
 | Typecheck | `npm run typecheck` |
 | Test | `npm test -- --runInBand` (`$env:TEST_DCMTK = '1'` first adds the real-DCMTK tests) |
-| End to end | `npm run e2e` (needs Docker Desktop) |
+| End to end | `npm run e2e` (needs Docker Desktop, and DCMTK and ImageMagick on `PATH`) |
 | Build | `npm run build` |
 | Everything CI runs | `npm run check` |
 
@@ -34,7 +34,7 @@ ImageMagick must be on `PATH`. See [docs/development.md](docs/development.md).
 
 Dependencies are **injected through the constructor** by type
 (`constructor(private readonly x: XService)`), not fetched with `Container.get()`. The
-three start-up values (config, logger, database) are injected by token from
+four start-up values (config, logger, database, diagnostics recorder) are injected by token from
 `src/tokens.ts`.
 
 If a repository starts to branch on state or role, that logic belongs in the service.
