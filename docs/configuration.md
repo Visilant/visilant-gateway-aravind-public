@@ -15,7 +15,7 @@ and use `"scheduled_station_ae": "VISILANT"`. See [development.md](development.m
 
 | Key | Default / purpose |
 | --- | --- |
-| `centre_code` | Required; identifies the centre in authentication tokens. |
+| `centre_code` | Required; identifies the centre in authentication tokens and, with `mwl.called_ae`, forms the screening `source_scope`. Changing either on a live gateway starts a new scope; see [api.md](api.md#source-scope). |
 | `listen_port` | `8080` |
 | `storage_root` | Required; local DICOM storage directory. |
 | `database_path` | Required; gateway SQLite file. |
@@ -40,6 +40,10 @@ unfiltered-worklist warning at start-up. How to choose: [worklist.md](worklist.m
 - `modality`: Modality (0008,0060) in the scheduled step, for example `OP`; omit to match any modality.
 - `scheduled_station_ae`: Scheduled Station AE Title (0040,0001); limits results to orders scheduled for this device.
 
+In `config.json`, `requested_procedure_id` and `scheduled_station_ae` are at most 16
+characters. `requested_procedure_id` and `modality` must not be empty strings: an empty
+string stops the gateway from starting. Omit the key instead.
+
 ## Change worklist filters in the dashboard
 
 An administrator can open **Diagnostics → Explain this worklist** at `/ui`, edit the
@@ -57,8 +61,9 @@ startup. To pick up later edits to that file, restart the gateway as well.
 Two dashboard sessions cannot overwrite each other's changes silently: a stale save
 returns 409 and must be reloaded. A failed database write leaves the active settings
 unchanged. Damaged saved filters stop startup rather than silently broadening the worklist.
-Only administrators can preview alternative filters, save them or reset them. Operators
-can inspect results and check the current filters.
+Only administrators can preview alternative filters, save them, reset them or inspect
+the incoming worklist records. Operators can run a check, read the check history and see
+the current filters.
 
 These controls change matching keys. They do not supply a missing Accession Number or
 map a patient identifier into an order identifier. An alternate order-ID mapping requires
@@ -73,15 +78,19 @@ AEH to confirm the exact input tag and its unique-per-order meaning first.
 | `LOG_LEVEL` | Logger level; default `info`. |
 | `IMG2DCM_BIN`, `DCM2JSON_BIN`, `ECHOSCU_BIN`, `FINDSCU_BIN`, `STORESCU_BIN`, `DCMDUMP_BIN`, `DCMODIFY_BIN` | DCMTK executable overrides; otherwise resolved on PATH. |
 | `MAGICK_BIN` | ImageMagick executable override; otherwise `magick` on PATH. |
-| `GATEWAY_DIAGNOSTICS_DIR` | Force gateway diagnostics on, in the selected directory. The operator page cannot turn it off. |
+| `GATEWAY_DIAGNOSTICS_DIR` | Force gateway diagnostics on, in the selected directory. The operator page cannot turn it off. Without it, recordings turned on from the operator page go to `<storage_root>/diagnostics`. |
 | `GATEWAY_LOG_DIR` | Write log files here as well as the console. Unset means console only. |
-| `GATEWAY_SETUP_DIR` | Setup wizard data folder. `windows/run.ps1` sets it to `%ProgramData%\Visilant`; elsewhere the default is `data/setup`. |
+| `GATEWAY_SETUP_DIR` | Setup wizard data folder. Default: `%ProgramData%\Visilant` on Windows (`windows/run.ps1` also sets it explicitly), `data/setup` on other platforms. |
+| `GATEWAY_SETUP_TOKEN` | Set by the setup launcher; do not set it by hand. Enables `/setup-progress` and setup observation. |
+| `GATEWAY_BUILD_ID` | Set by `windows/run.ps1`; do not set it by hand. Shown in the worklist support report and the setup report. |
+| `GATEWAY_MANAGED_STARTUP` | Set by `windows/run.ps1`; do not set it by hand. Makes setup require an observed restart of the computer. |
 
 ## Accounts and secrets
 
 Create operators with `npm run users -- add <email> <username>`; add `--admin` for an
 administrator. Omitting `--password` generates a password and prints it once. Use
-`npm run users -- passwd <email>` to reset it. The gateway keeps accounts locally.
+`npm run users -- passwd <email>` to reset it (it takes `--password` too).
+`npm run users -- list` prints how many accounts exist. The gateway keeps accounts locally.
 
 JWT signing secrets are generated on first use and stored in SQLite. They persist
 across restarts. Include the database when backing up gateway state; queued DICOM

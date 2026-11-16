@@ -152,6 +152,10 @@ captures/
 *.db
 *.db-wal
 *.db-shm
+*.dcm
+
+# Agent worktrees
+.claude/worktrees/
 
 # Explicit gateway recording files.
 /diagnostics/

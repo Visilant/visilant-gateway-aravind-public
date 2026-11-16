@@ -8,8 +8,9 @@ import { createHash } from 'crypto';
 // C-STORE retry idempotent — the archive recognises the repeat instead of accumulating
 // duplicate copies of the same photograph.
 //
-// Study Instance UID is never derived here: it comes from the worklist, because an image
+// Study Instance UID comes from the worklist whenever the RIS sends one, because an image
 // stored under a UID the RIS did not assign lands in a different study from the order.
+// Only when the RIS sends none does WorklistService derive one from the accession.
 export function deriveUid(seed: string, root: string): string {
     const base = root.endsWith('.') ? root.slice(0, -1) : root;
     const digits = BigInt('0x' + createHash('sha256').update(seed).digest('hex')).toString();

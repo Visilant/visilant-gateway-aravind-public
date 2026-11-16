@@ -48,14 +48,14 @@ The code follows **controller → service → repository**. Keep to it when you 
 
 | Layer | Folder | Does | Does not |
 |---|---|---|---|
-| Controller | `src/presentation/controllers/` | Receives the HTTP request, gets a validated DTO, calls one service, returns the result | Contain business rules or touch the database |
+| Controller | `src/presentation/controllers/` | Receives the HTTP request, gets a validated DTO, calls a service, returns the result | Contain business rules or touch the database |
 | Service | `src/application/services/` | All business rules: what to query, what to store, when to retry | Know about HTTP |
-| Repository | `src/infrastructure/database/repositories/` | Read and write one table | Decide anything |
+| Repository | `src/infrastructure/database/repositories/` | Read and write the database | Decide anything |
 | DICOM adapters | `src/infrastructure/dicom/` | Run the DCMTK tools and report what they said | Decide anything |
 
-Classes get their dependencies through the constructor (TypeDI injects them by type). Three
-values are made at start-up and injected by token instead: the config, the logger and the
-database (`src/tokens.ts`).
+Classes get their dependencies through the constructor (TypeDI injects them by type). Four
+values are made at start-up and injected by token instead: the config, the logger, the
+database and the diagnostics recorder (`src/tokens.ts`).
 
 ## Folder map
 
@@ -71,6 +71,8 @@ database (`src/tokens.ts`).
 | `src/infrastructure/storage/` | Where `.dcm` files are written on disk |
 | `src/infrastructure/image/jpeg.ts` | Reads the JPEG header (baseline or progressive, EXIF rotation) |
 | `src/infrastructure/diagnostics/` | Optional timing recorder used for performance investigation |
+| `src/infrastructure/logger/` | Logger: console, plus a rotating file when `GATEWAY_LOG_DIR` is set |
+| `src/tokens.ts` | Injection tokens for the values made at start-up |
 | `src/presentation/` | HTTP server, controllers, error handling, the operator web page (`ui/`) |
 | `src/setup/` | Windows setup wizard on port 8081 and the launcher that supervises the gateway |
 | `src/cli/manage-users.ts` | `npm run users` |
@@ -86,13 +88,17 @@ database (`src/tokens.ts`).
 | `WorklistService` | Runs the C-FIND, turns each response into a worklist row, drops rows that cannot be used, hides orders that are already complete |
 | `CaptureService` | Accepts one photograph: checks it against its screening, works out the series and UIDs, builds the DICOM file, adds a `PENDING` row |
 | `ScreeningService` | A *screening* is the set of photographs for one order. It tracks when every photograph is in the PACS (`COMPLETED`) and lets an operator release a screening that cannot finish |
-| `SyncWorker` | Every `sync_interval_seconds`, sends `PENDING` captures to the PACS, with exponential back-off |
-| `RetentionService` | After delivery, deletes old `.dcm` files according to `retention` |
+| `SyncWorker` | Sends `PENDING` captures to the PACS in batches of 10: as soon as one is accepted (`send_immediately`) and every `sync_interval_seconds`, with exponential back-off |
+| `RetentionService` | Under `retention: KEEP`, after each delivery and once at start-up, deletes sent `.dcm` files beyond the newest `retention_keep_count`. (`DELETE_ON_SENT` is handled in `SyncWorker`) |
 | `ScreeningExpiry` | Releases screenings that have had no activity for `screening_expiry_days` |
 | `HealthService` | `GET /health` |
 | `AuthService`, `SecretService` | Sign-in, JWT tokens, signing secrets stored in SQLite |
 | `DicomPreviewService` | Preview image and tags for the operator page |
-| `SetupVerificationService` | Records the steps of the setup wizard |
+| `SetupVerificationService` | Records the evidence and completion of the setup wizard's final test. The wizard itself is `src/setup/SetupService.ts` |
+| `WorklistSettingsService` | Worklist filters saved from the dashboard (`worklist.filters.v1` in SQLite), applied over `config.json` at start-up |
+| `WorklistDiagnosticsService` | The worklist diagnostics and the support report |
+| `DiagnosticsService` | Turns the timing recorder on and off; lists, summarises and zips recorded segments |
+| `SystemService` | `/system/config` and the five-second resource samples behind `/system/device` |
 
 ## A worklist request
 
@@ -122,7 +128,7 @@ sequenceDiagram
     G->>G: JPEG → DICOM OP object (img2dcm)
     G->>D: write .dcm, insert row PENDING
     G-->>P: 200 accepted (capture ID, UIDs)
-    loop every sync_interval_seconds
+    loop on accept (send_immediately) and every sync_interval_seconds
         G->>D: claim PENDING rows → SENDING
         G->>A: C-STORE (storescu)
         A-->>G: success

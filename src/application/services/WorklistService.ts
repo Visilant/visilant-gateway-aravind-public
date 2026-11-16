@@ -75,7 +75,7 @@ export class WorklistService {
         try {
             const datasets = await this.worklistClient.query(node, {
                 // No date unless the caller asks for one. The MWL holds open orders only and
-                // the configured procedure ID already narrows it; a today-only default would
+                // the configured filters already narrow it; a today-only default would
                 // hide an order booked yesterday that the patient is sitting in front of now.
                 scheduledDate: query.date,
                 patientId: query.patient_id,

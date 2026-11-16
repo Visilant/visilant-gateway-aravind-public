@@ -115,7 +115,7 @@ export class GatewayConfig {
     send_immediately: boolean = true;
 
     // Attempts before a capture is parked as FAILED. With the capped backoff this is
-    // roughly nine hours — long enough to ride out an archive outage, short enough that
+    // roughly seven hours — long enough to ride out an archive outage, short enough that
     // a genuinely broken object surfaces the same day instead of retrying forever.
     @IsInt()
     @IsPositive()

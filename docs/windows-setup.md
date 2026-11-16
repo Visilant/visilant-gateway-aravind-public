@@ -35,7 +35,8 @@ phone changes.
 
 **Ask them to register the gateway** on both servers: AE title `VISILANT` with this
 computer's IP address, and permission to **store** images on the PACS. Without this the
-connection test in the wizard fails with "Calling AE Title Not Recognized".
+connection test in the wizard fails with "Worklist server refused the AE title" (or "PACS
+refused the AE title").
 
 ## Step 1: install Git and Node 22
 
@@ -89,7 +90,7 @@ At the end your browser opens the **setup wizard** at http://127.0.0.1:8081. The
 a **Gateway Setup** shortcut on the desktop.
 
 If the command stops with a red message, fix what it says and run the same command again.
-Steps that already finished are skipped.
+Tools that were already downloaded are kept; `npm ci` and the bundle build run again.
 
 ## Step 4: the setup wizard
 
@@ -116,11 +117,11 @@ starting values. Change them to match your servers.
 | Gateway AE title | `VISILANT` |
 | Procedure ID (optional) | Leave empty unless every order for this device has the same procedure ID |
 | Approved DICOM UID root | Leave as it is (`1.2.826.0.1.3680043.10.1338`, Visilant's) |
-| Advanced settings → Station filter | The station AE title your orders are scheduled to, usually `VISILANT`. This is the best way to show the phone only its own patients |
-| Advanced settings → Modality filter | Usually empty. `OP` would also match fundus camera orders |
+| Advanced settings → Station filter (optional) | The station AE title your orders are scheduled to, usually `VISILANT`. This is the best way to show the phone only its own patients |
+| Advanced settings → Modality filter (optional) | Usually empty. `OP` would also match fundus camera orders |
 
 Click **Save & test connections**. The gateway sends a DICOM "echo" to each server. Both
-rows must say **Ready**. If one fails, the message says why; the table in
+rows must say **Ready**. If one fails, the message says what to check; the table in
 [troubleshooting.md](troubleshooting.md#connection-test-fails-in-the-setup-wizard) lists
 the causes. Fix the details and test again.
 
@@ -135,7 +136,7 @@ the gateway. Keep the password somewhere safe; it is not shown again.
 
 ### 4. Connect the phone
 
-The wizard shows this computer's **gateway address** (for example `192.168.1.20:8080`).
+The wizard shows this computer's **gateway address** (for example `http://192.168.1.20:8080`).
 
 On the phone, open **InSight-Gateway**:
 
@@ -168,6 +169,7 @@ failed images.
 | "Node 24... the gateway needs Node 22" | `nvm install 22`, `nvm use 22`, open a new window, run the setup command again |
 | `npm ci` prints `node-gyp`, `MSBuild` or "Visual Studio" | The wrong Node is active. Same fix as above |
 | "Could not download..." | Check the internet connection or proxy. Downloads are needed only once |
+| "Building the bundle failed", with a message such as `Build with Node 22.` or `Missing DCMTK bin\…` | See the table in [development.md](development.md#6-build-the-windows-bundle-by-hand) |
 | Administrator prompt was cancelled | Run the setup command again and click **Yes** |
 | Wizard page does not open | Open http://127.0.0.1:8081 yourself, or use the desktop shortcut |
 | Connection test fails | [troubleshooting.md](troubleshooting.md#connection-test-fails-in-the-setup-wizard) |
@@ -220,9 +222,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\uninstall.ps1
 ```
 
 Add `-Apply` to remove the application and its Windows integration while **keeping all
-saved data**. This is an uninstall, not an upgrade: the normal installer refuses a partial
-installation containing retained data. For an upgrade, use the consistent backup/repair
-procedure in [troubleshooting.md](troubleshooting.md#updating-an-installed-gateway).
+saved data**. This is not an upgrade path: while `C:\ProgramData\Visilant` still holds
+data, `Gateway.cmd` and the setup command refuse to install ("An incomplete installation
+was found"), and there is no supported way yet to reinstall over kept data. To change the
+code of an installed gateway, do not uninstall; follow
+[troubleshooting.md](troubleshooting.md#updating-an-installed-gateway).
 
 For a deliberately authorized **full reset of a test computer**, this permanently deletes
 settings, accounts, logs, diagnostic recordings under the data folder and unsent photographs:

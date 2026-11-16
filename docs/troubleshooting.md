@@ -88,14 +88,18 @@ so the fault shows before the first patient.
 
 ## Connection test fails in the setup wizard
 
-The wizard sends a DICOM C-ECHO to each server.
+The wizard sends a DICOM C-ECHO to each server and shows one short sentence. The server's
+own words are in `C:\ProgramData\Visilant\logs\launcher.log`, on a line starting
+`DICOM C-ECHO failed:`. Both AE-title rejections give the same sentence in the wizard;
+only the log tells them apart.
 
-| Message or log | Cause | Fix |
-|---|---|---|
-| `timed out` | Wrong address or port, or a firewall blocks it | Check host and port with IT. Test from the gateway computer: `Test-NetConnection <host> -Port <port>` |
-| `Association Rejected` / `Called AE Title Not Recognized` | Wrong hospital AE title | Get the exact AE title from IT. It is case-sensitive |
-| `Association Rejected` / `Calling AE Title Not Recognized` | The server does not know the gateway | IT must register the gateway AE title (`VISILANT`) **and the gateway computer's IP address** on that server |
-| `not found` | A DCMTK tool is missing | Reinstall the complete bundle |
+| Wizard says | `launcher.log` says | Cause | Fix |
+|---|---|---|---|
+| `cannot reach <host>:<port>, check address and firewall` | `timed out`, or `Connection refused` | Wrong address or port, or a firewall blocks it | Check host and port with IT. Test from the gateway computer: `Test-NetConnection <host> -Port <port>` |
+| `Worklist server refused the AE title…` or `PACS refused the AE title…` | `Called AE Title Not Recognized` | Wrong hospital AE title | Get the exact AE title from IT. It is case-sensitive |
+| The same sentence | `Calling AE Title Not Recognized` | The server does not know the gateway | IT must register the gateway AE title (`VISILANT`) **and the gateway computer's IP address** on that server |
+| `The DICOM tool is missing. Reinstall the complete Windows bundle.` | `not found` | A DCMTK tool is missing | Reinstall the complete bundle |
+| `Check the server address, port, AE titles and firewall with IT, then retry.` | Anything else | Not recognised | Read the log line and send it to support |
 
 ## C-ECHO works, but images do not reach the PACS
 
@@ -116,7 +120,10 @@ A C-ECHO proves only that the server answers. Storing can still be refused.
   without filters, then add one filter at a time.
 - **Every patient in the hospital:** no filter is set. The log says
   `No worklist filter is set`. Set `scheduled_station_ae` (best), `modality` or
-  `requested_procedure_id`. See [worklist.md](worklist.md#the-three-filters).
+  `requested_procedure_id`, in **Diagnostics → Explain this worklist** or in `config.json`
+  (filters saved in the dashboard override the file; see
+  [configuration.md](configuration.md#change-worklist-filters-in-the-dashboard)).
+  How to choose: [worklist.md](worklist.md#the-three-filters).
 - **Fundus patients appear:** the filter is `modality = OP`, which fundus cameras also use.
   Use a station filter instead.
 - **An order disappears after use:** this is expected. Orders with a completed screening
@@ -141,7 +148,10 @@ Read `launcher.log`. The usual causes:
 - **Invalid config.** The gateway refuses to start with an invalid `config.json`, and the log
   names the key. Unknown or misspelt keys are errors.
 - **Port 8081 in use.** Another setup window or launcher is running. Close it.
-- **Port 8080 in use.** Another program uses the gateway port.
+- **Port 8080 in use, or another start-up failure of the gateway itself.** `launcher.log`
+  only repeats `Gateway stopped with exit code 1 … Retrying in five seconds` and does not
+  give the reason, because the gateway writes it to its own error output, which the
+  startup task does not keep. Check the port with `Get-NetTCPConnection -LocalPort 8080`.
 
 ## Updating an installed gateway
 

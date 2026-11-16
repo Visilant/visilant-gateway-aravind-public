@@ -88,11 +88,11 @@ For working on the code. Run them in PowerShell from the repository folder.
 | `npm run users -- add <email> <username> [--admin]` | Create an account (prints a generated password once) |
 | `npm run users -- passwd <email>` | Reset a password |
 | `npm run migration:generate -- migrations/Name` | Generate a database migration from an entity change |
-| `npm run setup` | Run the setup wizard from source |
+| `npm run build`, then `npm run setup` | Run the setup wizard without installing. Set `GATEWAY_SETUP_DIR` first; see [docs/development.md](docs/development.md) |
 
 `GET /health` checks the database, the queue, free disk space, and sends a DICOM C-ECHO to
 both servers. It returns `200` when everything works and `503` when something does not,
-with a `detail` on the check that failed.
+with a `detail` on the check that failed. It is also `503` while any photograph is `FAILED`.
 
 ## Technology
 

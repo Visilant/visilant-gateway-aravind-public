@@ -31,8 +31,8 @@ findscu -W <mwl.host> <mwl.port> -aec <mwl.called_ae> -aet <mwl.calling_ae> -k <
 
 - `-W` selects the Modality Worklist information model.
 - `-aec` is the **called AE title**, the name of the worklist server (for example
-  `FREEDOM_MWL`). `-aet` is the **calling AE title**, the gateway's own name (default
-  `VISILANT`). Many servers accept only calling AE titles that they know, so hospital IT
+  `FREEDOM_MWL`). `-aet` is the **calling AE title**, the gateway's own name (the setup
+  wizard pre-fills `VISILANT`; `config.json` has no default). Many servers accept only calling AE titles that they know, so hospital IT
   must register the gateway's AE title and its IP address.
 - `-X -od` writes each response to a file. The gateway converts each file to JSON with
   `dcm2json`, reads it, then deletes the folder. Response content is not retained; diagnostics can retain aggregate counts.
@@ -106,18 +106,20 @@ These are DICOM rules. The worklist server applies them, not the gateway.
 - A lone `*` is meant to match everything. Some servers apply it only to orders where the
   field has a value, and drop orders where it is empty. To match everything, **remove the
   key** from `mwl` in `config.json` (or leave the field blank in the setup wizard) rather
-  than writing `*`. In the JSON file, empty strings are rejected for procedure ID and modality; omit those
-  keys instead. The dashboard removes a filter when its field is blank.
-- Date matching accepts a single date `20261010` or a range `20261001-20261031`.
+  than writing `*`. In the JSON file, an empty string is rejected for procedure ID and modality (omit those
+  keys instead); an empty `scheduled_station_ae` is accepted and means no filter. The dashboard removes a filter when its field is blank.
+- Date matching accepts a single date `20261010`, a range `20261001-20261031`, or an open
+  range `20261001-` or `-20261031`.
 
 ## What the gateway does with the responses
 
 1. One response can have several scheduled steps. Each step becomes **one row** on the
-   phone.
+   phone. A response with no scheduled step still becomes one row, without scheduling
+   details.
 2. A response without an Accession Number or a Patient ID is **dropped**, because the
    gateway cannot file a photograph without them. The log counts dropped rows but never
    shows their contents.
-3. If the response has a Study Instance UID, the gateway **uses it exactly**. Then the
+3. If the response has a Study Instance UID, the gateway **uses it as received** (padding trimmed). Then the
    photographs go into the study that the HIS created. If it is missing, the gateway makes
    one from the accession number and `study_uid_root`, so all photographs for that order
    share a study.
@@ -150,7 +152,9 @@ The row returned to the phone is defined in `src/application/dto/worklist.dto.ts
 6. Administrators can preview a different combination of the three filters without
    saving it. **Save filters** applies them to all connected phones on their next refresh.
    Use values confirmed for anterior imaging: `OP` can also match fundus orders and a
-   procedure description is not a procedure ID.
+   procedure description is not a procedure ID. **Restore config-file filters** removes the
+   saved override and returns to the values loaded from `config.json` at start-up. Only
+   one check, preview or inspection runs at a time; a second one returns 409.
 7. For a local support call, an administrator can select **Inspect incoming records**.
    This runs a fresh gateway-only query using the saved filters. The screen shows the
    endpoint and filters used, actual accession and patient identifiers, incoming Study
@@ -222,8 +226,12 @@ address: hospital IT must register it.
 
 ### Change a filter value at a site
 
-Edit `mwl` in `C:\ProgramData\Visilant\config.json` (or `config.json` in development) and
-restart the gateway. No code change is needed. Config is checked at start-up: an unknown
+No code change is needed. Change the three filters in **Diagnostics → Explain this
+worklist** (no restart), or edit `mwl` in `C:\ProgramData\Visilant\config.json` (or
+`config.json` in development) and restart the gateway. If filters were ever saved in the
+dashboard, the saved values override the three filter keys in the file at every start:
+select **Restore config-file filters** first, then restart. Connection keys (`host`,
+`port`, AE titles) always come from the file. Config is checked at start-up: an unknown
 or misspelt key stops the gateway with a clear error.
 
 ### Add a new filter (for example Requested Procedure Code)
@@ -233,13 +241,21 @@ or misspelt key stops the gateway with a clear error.
 2. **Query.** In `WorklistClient.buildKeys`, send the tag as a matching key when the value
    is set. Top-level tags go in `RETURN_KEYS` and the `matching` map. Tags inside the
    Scheduled Procedure Step go through `sps(tag, value)`. Add the tag number to
-   `src/infrastructure/dicom/dicom.tags.ts` if it is not there.
+   `src/infrastructure/dicom/dicom.tags.ts` if it is not there. If the tag is in
+   `SPS_RETURN_KEYS`, also exclude it from the return-key loop at the end of `buildKeys`,
+   or the key is sent twice.
 3. **Wizard (optional).** Add a field in `src/presentation/ui/setup/setup.js`.
 4. **Start-up warning.** Include the new key in the "no worklist filter" check in
    `src/index.ts`.
-5. **Tests.** Extend `tests/worklist-client.test.ts` to check the exact `-k` arguments.
+5. **Dashboard.** Add the key to `KEYS` in `WorklistSettingsService.ts`, to
+   `WorklistFiltersDto` and the `filters` type in `worklist-diagnostics.dto.ts`, to
+   `inspectedQuery` and `report.filters` in `WorklistService.explain`, and to
+   `filterLabels` in `src/presentation/ui/app.js`. A saved `worklist.filters.v1` value
+   with a different number of keys stops start-up (`restoreAtBoot`), so decide how
+   settings already saved at a site are upgraded.
+6. **Tests.** Extend `tests/worklist-client.test.ts` to check the exact `-k` arguments.
    Extend `tests/config.test.ts` for validation.
-6. **Docs.** Update this page and [configuration.md](configuration.md).
+7. **Docs.** Update this page, [configuration.md](configuration.md) and [api.md](api.md).
 
 ### Return a new field to the phone
 
