@@ -26,3 +26,11 @@ test('start is idempotent, timer is unrefed, and stop allows a restart', () => {
     try { service.start(); service.start(); expect(interval).toHaveBeenCalledTimes(1); service.stop(); service.start(); expect(interval).toHaveBeenCalledTimes(2); }
     finally { interval.mockRestore(); }
 });
+test('config never returns the central telemetry token', () => {
+    const config = Object.assign(new GatewayConfig(), { centre_code: 'TEST', storage_root: '/nonexistent', database_path: '/nonexistent/db' });
+    config.telemetry = Object.assign(config.telemetry, { enabled: true, site_id: 'VC1', central_url: 'https://central.example.org', central_token: 'SYNTHETIC-SECRET' });
+    const value = new SystemService(config).config();
+    expect(JSON.stringify(value)).not.toContain('SYNTHETIC-SECRET');
+    expect(value.config.telemetry).toMatchObject({ enabled: true, site_id: 'VC1', central_url: 'https://central.example.org', central_token: '(set)' });
+    expect(config.telemetry.central_token).toBe('SYNTHETIC-SECRET');
+});

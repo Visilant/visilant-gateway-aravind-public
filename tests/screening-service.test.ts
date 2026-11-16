@@ -209,6 +209,7 @@ test('expiry is off at 0 days and never touches a delivered screening', async ()
 test('the release migration keeps existing screenings live and dates their activity from registration', async () => {
  await service.register(manifest); await addCapture('capture-1', CaptureStatus.SENT);
  const before = (await db.query('SELECT created_at FROM screening'))[0].created_at;
+ await db.undoLastMigration(); // telemetry_event, newer than the release migration
  await db.undoLastMigration(); await db.runMigrations();
  expect((await db.query('PRAGMA foreign_key_check')).length).toBe(0);
  expect(await row(manifest.id)).toMatchObject({ released_at: null, last_activity_at: before });
@@ -222,6 +223,7 @@ test('rolling the release migration back leaves no dangling capture reference', 
  await service.release(manifest.id, 'operator-1', 'PHONE_LOST');
  await service.register(screeningFor('screening-2', order.accession_number, ['capture-3'])); await addCapture('capture-3', CaptureStatus.PENDING, 'screening-2');
  // Foreign keys stay on, as they are under `npm run migration:revert`.
+ await db.undoLastMigration(); // telemetry_event, newer than the release migration
  await db.undoLastMigration();
  expect(await db.query('PRAGMA foreign_key_check')).toEqual([]);
  expect((await db.query("SELECT sql FROM sqlite_master WHERE name = 'capture'"))[0].sql).toContain('REFERENCES "screening"');

@@ -42,6 +42,7 @@ describe('schema', () => {
     // pragma ever stops being applied the FK becomes decorative and nothing else fails.
     it('adds the client key to an existing database without losing capture history', async () => {
         await repository.create(capture('legacy', CaptureStatus.SENT));
+        await database.undoLastMigration(); // Telemetry outbox migration
         await database.undoLastMigration(); // Screening release migration
         await database.undoLastMigration(); // Screening migration
         // Undo the diagnostics migration before testing the client-ID migration.

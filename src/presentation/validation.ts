@@ -28,7 +28,14 @@ export function parseMultipartDto<T extends object>(
         }
     }
 
-    const instance = plainToInstance(cls, plain, { exposeDefaultValues: true });
+    return validateDto(cls, plain);
+}
+
+// Validates a body the way routing-controllers does for @Body(), for a controller that
+// needs to see the failure itself.
+export function validateDto<T extends object>(cls: Constructor<T>, plain: unknown): T {
+    if (!plain || typeof plain !== 'object' || Array.isArray(plain)) throw new BadRequestError('request body must be a JSON object');
+    const instance = plainToInstance(cls, plain as Record<string, unknown>, { exposeDefaultValues: true });
     const errors = validateSync(instance as object, {
         whitelist: true,
         forbidNonWhitelisted: true,

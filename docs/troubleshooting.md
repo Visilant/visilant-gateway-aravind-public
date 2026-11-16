@@ -152,6 +152,29 @@ Read `launcher.log`. The usual causes:
   only repeats `Gateway stopped with exit code 1 … Retrying in five seconds` and does not
   give the reason, because the gateway writes it to its own error output, which the
   startup task does not keep. Check the port with `Get-NetTCPConnection -LocalPort 8080`.
+- **`telemetry.site_id`.** Telemetry is on (`telemetry.enabled: true`) and `site_id` is
+  missing, empty or malformed. `launcher.log` shows
+  `Gateway config is invalid: telemetry.site_id: ...` when the launcher starts; run from
+  source, the same text is on the console. Add the vision centre ID, or set `enabled` to
+  `false`.
+
+## Telemetry does not reach central
+
+Look for these in the gateway log. Details: [telemetry.md](telemetry.md).
+
+- **`telemetry push failed: central answered HTTP 401`** (or 403). `telemetry.central_token`
+  is wrong for this gateway. Rows stay in the outbox and are sent once it is fixed.
+- **`telemetry push failed: could not reach central (ENOTFOUND)`**, `ECONNREFUSED` or
+  `TIMEOUT`. The gateway has no internet, or `telemetry.central_url` is wrong. Nothing is
+  lost; the gateway retries every few minutes, at most every 30 minutes.
+- **`telemetry outbox: unsent events are over telemetry.max_outbox_mb`** (or
+  `max_unsent_mb`). Central has not confirmed anything for a long time. Some events are
+  being dropped; see [telemetry.md](telemetry.md#outbox-size). Fix the connection, or
+  download `GET /telemetry/export` as an admin and send the file to support.
+- **`telemetry: less than 1024 MB free on the gateway's disk`**. No telemetry is stored
+  until there is more space. Captures are not affected, but free disk space soon.
+- **`the previous run ended without a clean shutdown`**. A warning, not a fault: the
+  gateway lost power or was killed. It is recorded as `gateway.unclean_shutdown`.
 
 ## Updating an installed gateway
 

@@ -6,3 +6,4 @@ export { DiagnosticsController } from './diagnostics.controller';
 export { DicomPreviewController } from './dicom-preview.controller';
 export { SystemController } from './system.controller';
 export { ScreeningController } from './screening.controller';
+export { TelemetryController } from './telemetry.controller';

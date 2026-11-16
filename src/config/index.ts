@@ -4,7 +4,7 @@ import { plainToInstance } from 'class-transformer';
 import { ValidationError, validateSync } from 'class-validator';
 import { GatewayConfig } from './config.schema';
 
-export { GatewayConfig, DicomNodeConfig, MwlNodeConfig } from './config.schema';
+export { GatewayConfig, DicomNodeConfig, MwlNodeConfig, TelemetryConfig } from './config.schema';
 
 const DEFAULT_CONFIG_PATH = 'config.json';
 

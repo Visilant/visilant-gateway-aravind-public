@@ -30,6 +30,7 @@ You don't need to read everything at once. Read in this order as you get to know
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | The rules for this code. The most important ones are below |
 | [development.md](development.md) | Run from source, the tests, a local test PACS, database migrations, and step-by-step recipes for common changes |
 | [api.md](api.md) | The HTTP API the phone uses. The phone app is not in this repository, so this is a contract: do not break it |
+| [telemetry.md](telemetry.md) | Phone and gateway telemetry: the event types, the SQLite outbox, the push to central and its contract, pruning, export |
 
 ### Reference
 

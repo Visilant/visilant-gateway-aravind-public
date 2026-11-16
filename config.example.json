@@ -21,5 +21,8 @@
   },
   "sync_interval_seconds": 30,
   "send_immediately": true,
-  "max_send_attempts": 20
+  "max_send_attempts": 20,
+  "telemetry": {
+    "enabled": false
+  }
 }
