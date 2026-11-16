@@ -1,18 +1,20 @@
 # Gateway HTTP API
 
 The local app talks to the gateway over HTTP. All endpoints except `/health`, `/signin`,
-`/refresh` and the static operator page `/ui` require `Authorization: Bearer <token>`.
+`/refresh`, `POST /telemetry/events` (token optional, see [Telemetry](#telemetry)) and the
+static operator page `/ui` require `Authorization: Bearer <token>`.
 `/setup-progress` is used only by the setup wizard on the same computer and takes a
 loopback-only `x-setup-token` instead. Successful application responses
 are wrapped in `{ "data": ... }`. `/health` returns a flat monitoring response. Binary
 downloads (`/captures/:id/preview`, `/captures/:id/dicom`,
-`/diagnostics/segments/:id/archive`) and `/diagnostics/worklist/support` are not wrapped
-either.
+`/diagnostics/segments/:id/archive`), `/diagnostics/worklist/support` and the NDJSON
+stream `/telemetry/export` are not wrapped either.
 
 Errors return `{ "error": "<message>" }`. A 400 from validation adds `details`, which
 names the failing fields and never repeats the rejected values. Every 5xx message is
 replaced by `internal error`; the cause is in the gateway log. An unknown route returns
-404 `{ "error": "not found" }`. JSON bodies are limited to 1 MB.
+404 `{ "error": "not found" }`. JSON bodies are limited to 1 MB (256 KB for
+`POST /telemetry/events`).
 
 ## Setup wizard
 
@@ -179,12 +181,12 @@ pushes them to central. Event types, fields and the push are in
 
 | Method | Path | Input / result |
 | --- | --- | --- |
-| `POST` | `/telemetry/events` | Token optional; see below. JSON `{ "events": [ <event>, ... ] }`, 1 to 100 events and at most 256 KB; over either is 413. Returns `{ "data": { "accepted": [...], "duplicate": [...], "dropped": [...] } }`, each a list of `event_id`. With telemetry off: 204, no body, nothing stored. |
+| `POST` | `/telemetry/events` | Token optional; see below. JSON `{ "events": [ <event>, ... ] }`, 1 to 100 events and at most 256 KB; over either is 413. Returns `{ "data": { "accepted": [...], "duplicate": [...], "dropped": [...] } }`, each a list of `event_id`. With telemetry off: 204, no body, nothing stored (an oversized or malformed body is still 413 or 400). |
 | `GET` | `/telemetry/export` | ADMIN. Optional `since=<event_id>`. NDJSON (`application/x-ndjson`) of the unsent rows written after that event, one envelope per line. 400 when `since` is not in the outbox. |
 
 Each event is `{ event_id, schema_version, type, occurred_at, device_id, session_id,
 capture_id?, screening_id?, payload }`. `event_id` is a lowercase UUIDv7 made by the
-phone. The gateway adds `received_at`, `site_id` and `gateway_id`.
+phone. The gateway adds `received_at`, `site_id`, `gateway_id` and `authenticated`.
 
 - `accepted`: stored now. `duplicate`: the gateway already had this `event_id` (a retry);
   nothing changed. `dropped`: not stored because the gateway's outbox is over a cap or
@@ -192,9 +194,11 @@ phone. The gateway adds `received_at`, `site_id` and `gateway_id`.
   three as delivered and does not resend.
 - 400 means the whole request was rejected and nothing from it was stored. `details` is
   a list of `{ event, field, reason }`: the index of the failing event (null for the batch
-  itself), the field path in our own names, and `unknown_key`, `missing` or `invalid`. It
+  itself), the field path in our own names, and `unknown_key`, `missing` (an absent `payload`, `rejected_frames` or `dropped`
+  object) or `invalid` (everything else, including any other absent field). It
   never repeats a value, and an unknown key is shown as `<unknown key>`, never by its name. Unknown types, unknown keys,
-  and the gateway's own types (`gateway.*`, `ai.assessed`) are rejected.
+  and the gateway's own types (`gateway.started`, `gateway.heartbeat`, `gateway.stopped`, `gateway.unclean_shutdown`,
+  `ai.assessed`) are rejected.
 - Without a valid token (none, expired or invalid), only `app.started`, `app.crashed`,
   `operation.failed`, `device.health` and `gateway.unreachable` are accepted. Any other
   type refuses the whole request with 401, so sign in and send it again. An unsigned

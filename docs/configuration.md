@@ -52,7 +52,7 @@ records and how the push works: [telemetry.md](telemetry.md).
 
 | Key | Default / purpose |
 | --- | --- |
-| `telemetry.enabled` | `false`. Off: `POST /telemetry/events` answers 204 and stores nothing, the gateway writes no events of its own, and nothing is pushed. |
+| `telemetry.enabled` | `false`. Off: `POST /telemetry/events` answers 204 and stores nothing (an oversized or malformed body is still 413 or 400), the gateway writes no events of its own, and nothing is pushed. |
 | `telemetry.site_id` | Required when `enabled` is `true`: the vision centre ID, 1 to 64 letters, digits, `_` or `-`. Every record carries it. The gateway will not start with telemetry on and no `site_id`. |
 | `telemetry.central_url` | The central receiver, `http` or `https`, without `/v1/telemetry/batch`. Set it together with `central_token`. Without both, nothing is pushed and rows wait in the outbox. |
 | `telemetry.central_token` | This gateway's bearer token for central. Shown as `(set)` by `GET /system/config`. |

@@ -6,8 +6,9 @@ envelope and the same `event_id`, so central combines all sites with a plain uni
 no per-site handling.
 
 Telemetry is **off** unless `telemetry.enabled` is `true`. While it is off,
-`POST /telemetry/events` answers 204 and stores nothing, the gateway writes none of its
-own events, and nothing is pushed.
+`POST /telemetry/events` answers 204 and stores nothing (an oversized or malformed body is
+still 413 or 400), the gateway writes none of its own events, and nothing is pushed.
+Pruning and `GET /telemetry/export` still work, so rows from an earlier run can be read.
 
 ```
 phone ──POST /telemetry/events──▶ gateway ──SQLite telemetry_event (outbox)──▶ push worker ──POST /v1/telemetry/batch──▶ central
@@ -41,7 +42,7 @@ can still be taken off the gateway with the [export](#export-for-a-site-that-sta
 
 ## The envelope
 
-Every event has the same fields: on the wire from the phone (without the three fields the
+Every event has the same fields: on the wire from the phone (without the four fields the
 gateway sets), in SQLite, in the push to central and in the export.
 
 | Field | Type | Set by | Meaning |
@@ -80,7 +81,8 @@ the route, an unsigned request is limited:
   with more stack frames than fit must send fewer.
 - At most 30 requests a minute per client IP, and 120 a minute from all unsigned
   clients together, so rotating addresses do not get around it. Beyond either the answer
-  is 429 with `Retry-After`. Rejected and invalid requests count too. The counts are in
+  is 429 with `Retry-After`. Requests refused later for validation (400), type (401) or
+  event size (413) count too; a request refused for its total size does not. The counts are in
   memory and a restart clears them.
 - Each row is stored with `authenticated: false`, so central can tell these rows apart
   and weigh them accordingly.
@@ -109,7 +111,7 @@ sent [before sign-in](#before-sign-in).
 | `capture.upload_failed` (*sign-in*) | Upload gave up | `duration_ms`; optional `bytes`, `http_status`, `error_code` |
 | `yolo.autocapture` (*sign-in*) | An autocapture attempt ends | `outcome` (`fired`, `timed_out`, `cancelled`), `frames_evaluated`, `rejected_frames` (counts by `no_eye`, `clipped`, `too_close`, `too_far`, `off_centre`, `no_iris`, `gaze_off`, `hold_broken`), `yolo_model_revision`; optional `time_to_trigger_ms`, `winning_box` (`x`, `y`, `width`, `height`, each 0 to 1 of the frame), `winning_score` (0 to 1), `operator_decision` (`kept`, `retook`) |
 | `device.health` | Every 5 min while the app is in front | `battery_pct`, `charging`, `free_storage_bytes`, `network_kind` (`wifi`, `cellular`, `ethernet`, `none`, `other`), `seeker_connected`; optional `battery_temp_c`, `thermal_status` (Android thermal status, lowercase), `wifi_rssi_dbm` |
-| `gateway.unreachable` | First successful send after an outage | `from`, `to` (ISO 8601 UTC), `dropped` (counts by phone event type) |
+| `gateway.unreachable` | First successful send after an outage | `from`, `to` (ISO 8601 UTC), `dropped` (counts by phone event type, other than `gateway.unreachable` itself) |
 
 Text fields are allow-listed by shape: versions (`[A-Za-z0-9._+-]`, up to 64), Java class
 and method names, SHA-256 hex, the device model (`Build.MODEL`, letters, digits, spaces
@@ -129,7 +131,7 @@ The phone may not send these types.
 
 | Type | When | Payload |
 | --- | --- | --- |
-| `gateway.started` | Start-up | `gateway_version`, `uptime_s`, `outbox_backlog` (unsent rows) |
+| `gateway.started` | Start-up | `gateway_version`, `uptime_s`, `outbox_backlog` (unsent rows; in `gateway.started` it counts only rows written since this start, because the outbox totals are read afterwards) |
 | `gateway.heartbeat` | Every 60 s | Same as `gateway.started` |
 | `gateway.stopped` | Clean shutdown | Same as `gateway.started`, plus `reason`: `launcher`, `launcher_gone`, `SIGTERM` or `SIGINT` |
 | `gateway.unclean_shutdown` | Start-up, when the last of the three rows above to be written is not `gateway.stopped` | `last_heartbeat_at`, `restarted_at`, `downtime_s`, `host_restarted` (the computer booted after the last heartbeat: a power cut or an OS restart rather than the gateway alone; from the wall clock, so approximate) |
@@ -161,7 +163,8 @@ how Windows ends processes and have not been run on a Windows computer.
 
 ## Push to central
 
-`TelemetryPushWorker` runs every 60 s, and right away when 500 or more rows are unsent.
+`TelemetryPushWorker` runs every 60 s. A phone batch that stores at least one new row also
+starts a push right away when 500 or more rows are unsent, unless a back-off is running.
 
 1. Read up to 500 rows with `sent_at IS NULL` that are not quarantined, in the order
    they were written.
@@ -224,15 +227,16 @@ table.
 | Unsent rows | Stored | Refused (their ids come back in `dropped`) |
 | --- | --- | --- |
 | Up to `max_outbox_mb` (200) | Everything | Nothing |
-| Over `max_outbox_mb` | Signed-in crash, capture, YOLO and operation events; `ai.assessed`; the gateway lifecycle | Everything sent without sign-in; `device.health` |
-| Over `max_unsent_mb` (400) | The gateway lifecycle (`gateway.*`) only | Every phone event; `ai.assessed` |
+| Over `max_outbox_mb` | Every signed-in phone event except `device.health`; `ai.assessed`; the gateway lifecycle | Everything sent without sign-in; `device.health` |
+| Over `max_unsent_mb` (400) | The gateway lifecycle only (`gateway.started`, `gateway.heartbeat`, `gateway.stopped`, `gateway.unclean_shutdown`) | Every phone event; `ai.assessed` |
 
-Each step up is logged once as an error, and the way back down once as info.
+Each step up is logged once as an error, and the return to normal once as info.
 
 **Free disk.** Every minute the gateway checks the free space on the disks of the
 database and of `storage_root`. Below `telemetry.min_free_disk_mb` (1024) nothing at all
 is stored, lifecycle rows included, so captures always have room. This is logged once,
-and again when space returns.
+and again when space returns. The two start-up rows (`gateway.unclean_shutdown`,
+`gateway.started`) are written before the first disk check, so they are stored even then.
 
 So the unsigned path can add at most about `max_outbox_mb` of unsent rows, and phones
 together at most about `max_unsent_mb`; the lifecycle adds about 0.5 MB a day after that.
@@ -256,16 +260,20 @@ Exporting marks nothing.
 Records are pseudonymous, not anonymous: `capture_id` and `screening_id` join to a
 patient's `.dcm` at the site, on purpose. Patient identity never enters a record.
 
-- Every type is an allow-list DTO with `whitelist` and `forbidNonWhitelisted`. Unknown
+- Every phone type is an allow-list DTO with `whitelist` and `forbidNonWhitelisted`. Unknown
   types and keys are 400. There is no message field, and codes are shaped to rule out a
   plain word (see [Event types](#event-types)).
 - Crashes carry the exception class, an error code and code-only frames. The exception
   message is never sent.
-- `ai.assessed` carries the assessment, never the worklist entry.
+- `ai.assessed` is built by the gateway from the already validated assessment, never the
+  worklist entry. Its `capture_id` is the upload's `Idempotency-Key`. That header is
+  checked against the screening's declared capture IDs only when the upload names a
+  `screening_id`; on an upload without one it is stored as the phone sent it.
 - A rejected value is never returned and never logged, and neither is a key name the
   client sent: an unknown key is `<unknown key>`. The log line is
-  `telemetry rejected: event <index> (<type>) <field path> <reason>`, and the type is
-  logged only when it is one of the types above.
+  `telemetry rejected: event <index> (<type>) <field path> <reason>` (or
+  `batch <field> <reason>`), and the type is logged only when it is one of the phone
+  types; anything else shows as `unknown type`.
 - A body that is not valid JSON is answered with a fixed message; the parser's message,
   which quotes the body, is not logged.
 
@@ -281,6 +289,6 @@ patient's `.dcm` at the site, on purpose. Patient identity never enters a record
 | `src/application/services/TelemetryService.ts` | Writes phone and gateway events, `gateway_id`, export |
 | `src/application/services/TelemetryLifecycle.ts` | Started, heartbeat, stopped, unclean shutdown |
 | `src/application/services/TelemetryPushWorker.ts` | Push to central with backoff |
-| `src/application/services/TelemetryOutbox.ts` | Pruning and the `device.health` stop |
+| `src/application/services/TelemetryOutbox.ts` | Pruning, the two unsent caps and the free-disk floor (what may still be written) |
 | `src/infrastructure/telemetry/CentralClient.ts` | The HTTP call to central |
 | `src/infrastructure/database/repositories/TelemetryRepository.ts` | The `telemetry_event` table |

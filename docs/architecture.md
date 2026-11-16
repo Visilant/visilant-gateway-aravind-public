@@ -103,7 +103,7 @@ database and the diagnostics recorder (`src/tokens.ts`).
 | `TelemetryService` | Writes phone telemetry and the gateway's own events into the `telemetry_event` outbox; export. See [telemetry.md](telemetry.md) |
 | `TelemetryLifecycle` | `gateway.started`, a heartbeat every minute, `gateway.stopped`, and `gateway.unclean_shutdown` after a power cut |
 | `TelemetryPushWorker` | Every minute, pushes unsent telemetry to central, with exponential back-off |
-| `TelemetryOutbox` | Every 10 minutes, deletes sent telemetry past the size or age cap; never an unsent row |
+| `TelemetryOutbox` | Every 10 minutes, deletes sent telemetry past the size or age cap, never an unsent row; decides what is still stored when the unsent caps or the free-disk floor are passed |
 
 ## A worklist request
 

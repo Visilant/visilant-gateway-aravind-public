@@ -153,7 +153,10 @@ Read `launcher.log`. The usual causes:
   give the reason, because the gateway writes it to its own error output, which the
   startup task does not keep. Check the port with `Get-NetTCPConnection -LocalPort 8080`.
 - **`telemetry.site_id`.** Telemetry is on (`telemetry.enabled: true`) and `site_id` is
-  missing. Add the vision centre ID, or set `enabled` to `false`.
+  missing, empty or malformed. `launcher.log` shows
+  `Gateway config is invalid: telemetry.site_id: ...` when the launcher starts; run from
+  source, the same text is on the console. Add the vision centre ID, or set `enabled` to
+  `false`.
 
 ## Telemetry does not reach central
 
